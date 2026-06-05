@@ -1,0 +1,13 @@
+.git/
+.agents/
+__pycache__/
+*.py[cod]
+*.db
+.env
+.venv/
+venv/
+*.log
+*.png
+kalinabis/
+graphify-out/
+node_modules/

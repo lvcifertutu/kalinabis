@@ -1,0 +1,288 @@
+<!-- PORTAL ASTRAL (modal) -->
+<div class="luna-modal-overlay" id="luna-modal" onclick="if(event.target===this)cerrarLunaModal()">
+<div class="luna-widget" id="luna-widget">
+  <div class="luna-header">
+    <span class="luna-titulo">☽ Portal Astral</span>
+    <button class="luna-toggle" onclick="cerrarLunaModal()" title="cerrar">✕</button>
+  </div>
+  <div class="luna-body">
+
+    <div class="luna-rueda-wrap">
+      <svg id="luna-rueda" width="200" height="200" viewBox="-100 -100 200 200"></svg>
+    </div>
+
+    <div class="luna-fase-row">
+      <span class="luna-fase-emoji" id="luna-emoji">🌑</span>
+      <div class="luna-fase-info">
+        <div class="luna-fase-nombre" id="luna-fase-nombre">cargando...</div>
+        <div class="luna-fase-sub" id="luna-fase-sub">—</div>
+      </div>
+    </div>
+
+    <div class="luna-marea-wrap">
+      <div class="luna-marea-label">
+        <span>Marea emocional</span>
+        <span id="luna-marea-pct">—</span>
+      </div>
+      <div class="luna-marea-bar">
+        <div class="luna-marea-fill" id="luna-marea-fill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div class="luna-divider"></div>
+
+    <div class="luna-tabla">
+      <div class="luna-fila">
+        <span class="luna-key">Signo</span>
+        <span class="luna-val" id="luna-signo">—</span>
+      </div>
+      <div class="luna-fila">
+        <span class="luna-key">Mansión</span>
+        <span class="luna-val" id="luna-mansion">—</span>
+      </div>
+      <div class="luna-fila">
+        <span class="luna-key">Nodo ☊</span>
+        <span class="luna-val" id="luna-rahu">—</span>
+      </div>
+      <div class="luna-fila">
+        <span class="luna-key">Nodo ☋</span>
+        <span class="luna-val" id="luna-ketu">—</span>
+      </div>
+      <div class="luna-fila">
+        <span class="luna-key">Distancia</span>
+        <span class="luna-val" id="luna-distancia">—</span>
+      </div>
+      <div class="luna-fila">
+        <span class="luna-key">Celta</span>
+        <span class="luna-val" id="luna-celta">—</span>
+      </div>
+      <div class="luna-fila">
+        <span class="luna-key">Haab</span>
+        <span class="luna-val" id="luna-haab">—</span>
+      </div>
+    </div>
+
+    <div class="luna-seph">
+      <div class="luna-seph-nombre" id="luna-seph-nombre">—</div>
+      <div class="luna-seph-desc" id="luna-seph-desc">—</div>
+    </div>
+
+    <div class="luna-voc" id="luna-voc">
+      ⚠ Void of Course — pausa y observa
+    </div>
+
+    <div class="luna-divider"></div>
+
+    <div class="luna-timeline">
+      <div class="luna-timeline-title">Próximos eventos</div>
+      <div id="luna-eventos"></div>
+    </div>
+
+    <div class="luna-divider"></div>
+
+    <div class="luna-deidades-mod">
+      <div class="luna-mod-title">Deidades hoy</div>
+      <div class="luna-mod-grid" id="luna-mod-grid"></div>
+    </div>
+
+    <div class="luna-deidad-tag" id="luna-deidad-tag">—</div>
+
+  </div>
+</div>
+</div>
+
+<!-- CÁMARA DE SIGILOS -->
+<div id="camara-sigilos">
+  <button class="camara-exit" onclick="cerrarCamaraSigilos()">✕ SALIR</button>
+
+  <div class="camara-titulo">
+    <span class="camara-titulo-txt">✶ CÁMARA DE SIGILOS</span>
+    <span class="camara-sub" id="camara-deidad-sub">el humo escucha tu intención</span>
+  </div>
+
+  <div class="camara-layout">
+
+    <div class="camara-panel">
+      <div class="sigilo-seccion">
+        <div class="sigilo-seccion-titulo">I · La intención</div>
+        <textarea id="sigilo-intencion" placeholder="Escribe tu deseo... &#10;ej: quiero claridad para decidir mi camino" rows="3"></textarea>
+        <button class="sigilo-btn-generar" onclick="generarSigilo()">⟳ Destilar en sigilo</button>
+      </div>
+
+      <div class="sigilo-seccion" id="sigilo-proceso-wrap" style="display:none">
+        <div class="sigilo-seccion-titulo">II · La destilación</div>
+        <div class="sigilo-proceso" id="sigilo-proceso"></div>
+      </div>
+
+      <div class="sigilo-seccion">
+        <div class="sigilo-seccion-titulo">III · El pincel</div>
+        <div class="pincel-controles">
+          <div class="pincel-grosores">
+            <button class="grosor-btn" data-grosor="2" onclick="setGrosor(2,this)">·</button>
+            <button class="grosor-btn active" data-grosor="4" onclick="setGrosor(4,this)">•</button>
+            <button class="grosor-btn" data-grosor="8" onclick="setGrosor(8,this)">⬤</button>
+          </div>
+          <input type="color" id="pincel-color" value="#c4a96a" onchange="setPincelColor(this.value)">
+        </div>
+        <div class="lienzo-acciones">
+          <button class="lienzo-btn" onclick="deshacerTrazo()">↶ Deshacer</button>
+          <button class="lienzo-btn" onclick="limpiarLienzo()">✕ Limpiar</button>
+        </div>
+      </div>
+
+      <div class="sigilo-seccion">
+        <div class="sigilo-seccion-titulo">IV · La deidad</div>
+        <button class="sigilo-btn-deidad" onclick="verSigiloDeidad()">Ver el sigilo de <span id="sig-deidad-nombre">Tutu</span></button>
+        <button class="sigilo-btn-deidad" onclick="pedirIntencionDeidad()">Pedir intención a la deidad</button>
+        <button class="sigilo-btn-deidad" onclick="cocrearDeidad()">Co-crear: guíame</button>
+      </div>
+
+      <button class="sigilo-btn-guardar" onclick="guardarSigilo()">✶ Sellar en el grimorio</button>
+    </div>
+
+    <div class="camara-lienzo-wrap">
+      <div class="lienzo-marco">
+        <svg class="lienzo-circulo" viewBox="0 0 600 600">
+          <circle cx="300" cy="300" r="285" fill="none" stroke="currentColor" stroke-width="1" opacity="0.15"/>
+          <circle cx="300" cy="300" r="265" fill="none" stroke="currentColor" stroke-width="0.5" opacity="0.1"/>
+        </svg>
+        <canvas id="sigilo-rueda" width="600" height="600"></canvas>
+        <canvas id="sigilo-lienzo" width="600" height="600"></canvas>
+      </div>
+      <div class="lienzo-mensaje-deidad" id="lienzo-mensaje-deidad"></div>
+    </div>
+
+    <div class="camara-panel camara-galeria">
+      <div class="sigilo-seccion-titulo">La galería de sigilos</div>
+      <div id="galeria-sigilos" class="galeria-grid"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- CÁMARA DE TAROT -->
+<div id="camara-tarot">
+  <button class="camara-exit" onclick="cerrarTarot()">✕ SALIR</button>
+
+  <div class="camara-titulo">
+    <span class="camara-titulo-txt">🜔 TAROT DE LOS ARCANOS</span>
+    <span class="camara-sub" id="tarot-sub">mueve las cartas con tu mano · el azar te incluye</span>
+  </div>
+
+  <div class="tarot-barra">
+    <div class="tarot-luna-info" id="tarot-luna-info">☽ cargando luna...</div>
+    <div class="tarot-natal-info" id="tarot-natal-info">
+      <button class="tarot-natal-btn" onclick="abrirNatalModal()">✦ Carta natal del consultante</button>
+    </div>
+  </div>
+
+  <div class="tarot-fase" id="tarot-fase-barajar">
+    <div class="tarot-mazo-wrap" id="tarot-mazo-wrap">
+      <div class="tarot-instruccion">Pasa el cursor sobre las cartas para mezclarlas.<br>Cuando sientas que es el momento, extrae la tirada.</div>
+      <div class="tarot-mazo" id="tarot-mazo"></div>
+      <button class="tarot-btn-tirar" onclick="extraerTirada()">Extraer las tres cartas</button>
+      <div class="tarot-entropia">azar acumulado: <span id="tarot-entropia-val">0</span></div>
+    </div>
+  </div>
+
+  <div class="tarot-fase" id="tarot-fase-tirada" style="display:none">
+    <div class="tarot-tirada" id="tarot-tirada"></div>
+    <div class="tarot-acciones">
+      <button class="tarot-btn-leer" id="tarot-btn-leer" onclick="pedirLecturaDeidad()" style="display:none">
+        Que <span id="tarot-deidad-nombre">la deidad</span> lea la tirada
+      </button>
+      <button class="tarot-btn-nueva" onclick="nuevaTirada()">↻ Nueva tirada</button>
+    </div>
+    <div class="tarot-lectura" id="tarot-lectura"></div>
+  </div>
+</div>
+
+<!-- Modal carta natal -->
+<div class="natal-modal-overlay" id="natal-modal" onclick="if(event.target===this)cerrarNatalModal()">
+  <div class="natal-modal">
+    <div class="natal-modal-titulo">✦ Carta natal del consultante</div>
+    <div class="natal-form">
+      <label>Nombre</label>
+      <input type="text" id="natal-nombre" placeholder="nombre del consultante">
+      <div class="natal-fila">
+        <div><label>Día</label><input type="number" id="natal-dia" min="1" max="31" placeholder="15"></div>
+        <div><label>Mes</label><input type="number" id="natal-mes" min="1" max="12" placeholder="5"></div>
+        <div><label>Año</label><input type="number" id="natal-anio" min="1900" max="2030" placeholder="1990"></div>
+      </div>
+      <div class="natal-fila">
+        <div><label>Hora</label><input type="number" id="natal-hora" min="0" max="23" placeholder="14"></div>
+        <div><label>Minuto</label><input type="number" id="natal-minuto" min="0" max="59" placeholder="30"></div>
+      </div>
+      <label>Lugar de nacimiento</label>
+      <select id="natal-ciudad" onchange="onCiudadChange()"></select>
+      <div id="natal-manual" style="display:none">
+        <div class="natal-fila">
+          <div><label>Latitud</label><input type="number" id="natal-lat" step="0.01" placeholder="-33.45"></div>
+          <div><label>Longitud</label><input type="number" id="natal-lng" step="0.01" placeholder="-70.65"></div>
+        </div>
+        <label>Zona horaria (ej: America/Santiago)</label>
+        <input type="text" id="natal-tz" placeholder="America/Santiago">
+      </div>
+      <button class="natal-btn-calcular" onclick="calcularNatal()">Calcular carta natal</button>
+    </div>
+    <div class="natal-resultado" id="natal-resultado"></div>
+  </div>
+</div>
+
+<!-- PANEL DEL BOSQUE -->
+<div id="panel-bosque" class="bosque-overlay" role="dialog" aria-modal="true" aria-labelledby="bosque-titulo" onclick="if(event.target===this)cerrarBosque()">
+  <div class="bosque-container">
+    <div class="bosque-header">
+      <h1 id="bosque-titulo" class="bosque-titulo">◉ EL BOSQUE VIVO</h1>
+      <button class="camara-exit" onclick="cerrarBosque()" aria-label="Cerrar panel del bosque">✕ SALIR</button>
+    </div>
+
+    <div class="bosque-grid">
+      <section class="bosque-seccion" aria-labelledby="salud-titulo">
+        <h2 id="salud-titulo" class="bosque-subtitulo">Salud del bosque</h2>
+        <div class="bosque-salud-grid" id="bosque-salud-grid">
+          <div class="bosque-stat">
+            <div class="bosque-stat-num" id="bosque-total">—</div>
+            <div class="bosque-stat-label">esferas totales</div>
+          </div>
+          <div class="bosque-stat activas">
+            <div class="bosque-stat-num" id="bosque-activas">—</div>
+            <div class="bosque-stat-label">activas</div>
+          </div>
+          <div class="bosque-stat letargo">
+            <div class="bosque-stat-num" id="bosque-letargo">—</div>
+            <div class="bosque-stat-label">en letargo</div>
+          </div>
+          <div class="bosque-stat disolviendo">
+            <div class="bosque-stat-num" id="bosque-disolviendo">—</div>
+            <div class="bosque-stat-label">disolviéndose</div>
+          </div>
+        </div>
+
+        <div class="bosque-amp">
+          <div class="bosque-amp-label">Amplitud promedio</div>
+          <div class="bosque-amp-bar"><div class="bosque-amp-fill" id="bosque-amp-fill"></div></div>
+          <div class="bosque-amp-valor" id="bosque-amp-valor">—</div>
+        </div>
+
+        <div class="bosque-distribucion">
+          <h3 class="bosque-h3">Distribución por tipo</h3>
+          <div class="bosque-distribucion-grid" id="bosque-distribucion"></div>
+        </div>
+      </section>
+
+      <section class="bosque-seccion" aria-labelledby="mapa-titulo">
+        <h2 id="mapa-titulo" class="bosque-subtitulo">Mapa del bosque</h2>
+        <div class="bosque-mapa-wrap">
+          <svg id="bosque-mapa-svg" viewBox="0 0 800 500" aria-label="Mapa visual del bosque con esferas activas"></svg>
+          <div class="bosque-leyenda" id="bosque-leyenda"></div>
+        </div>
+      </section>
+
+      <section class="bosque-seccion" aria-labelledby="fuertes-titulo">
+        <h2 id="fuertes-titulo" class="bosque-subtitulo">Esferas más fuertes</h2>
+        <div class="bosque-fuertes" id="bosque-fuertes"></div>
+      </section>
+    </div>
+  </div>
+</div>

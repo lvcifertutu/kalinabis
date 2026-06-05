@@ -1,0 +1,163 @@
+<div class="app">
+  <header>
+    <div class="logo"><span>K</span>ALINABIS</div>
+    <div class="project-code-wrap" title="Tu código de proyecto — guárdalo para no perder tu acceso">
+      <span class="project-code-label">proyecto:</span>
+      <span class="project-code" id="project-code-display" onclick="copiarCodigo()">...</span>
+    </div>
+    <div class="header-right">
+      <button class="hdr-btn" id="btn-luna" onclick="abrirLunaModal()">☽ <span id="hdr-luna-fase">LUNA</span></button>
+      <button class="hdr-btn" onclick="abrirCamaraSigilos()">✶ SIGILOS</button>
+      <button class="hdr-btn" onclick="abrirTarot()">🜔 TAROT</button>
+      <button class="hdr-btn" onclick="abrirBosque()">◉ BOSQUE</button>
+      <button class="hdr-btn" id="btn-sonido" onclick="toggleSonido()">♪ SONIDO</button>
+      <button class="hdr-btn" onclick="toggleRitual()">◈ RITUAL</button>
+      <div class="header-status">
+        <span class="status-dot"></span>
+        <span id="status-text">el humo se eleva</span>
+      </div>
+    </div>
+  </header>
+
+  <aside class="panel-deidades">
+    <div class="panel-title">Entidades</div>
+    <div class="kali-node">
+      <div class="kali-name">K A L I</div>
+      <div class="kali-desc">matriz primordial · el origen</div>
+    </div>
+    <div class="deity-divider"></div>
+
+    <div class="tutu-section">
+      <button class="deity-btn" data-deity="tutu" onclick="setDeidad('tutu')" aria-label="Invocar a Tutu, hijo del humo" aria-pressed="true">
+        <div class="deity-header"><div class="deity-dot"></div><div class="deity-name">TUTU</div><span class="deity-amp-dot" id="amp-tutu"></span></div>
+        <div class="deity-symbols">
+          <span class="alch-symbol">☽</span>
+          <svg class="compass-mini" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="12" fill="none" stroke="#c4a96a44" stroke-width="0.8"/><circle cx="14" cy="14" r="1.8" fill="#c4a96a"/></svg>
+        </div>
+      </button>
+      <div class="deity-memory" id="mem-tutu"></div>
+    </div>
+    <div class="deity-divider"></div>
+
+    <button class="deity-btn" data-deity="isis" onclick="setDeidad('isis')">
+      <div class="deity-header"><div class="deity-dot"></div><div class="deity-name">ISIS</div><span class="deity-amp-dot" id="amp-isis"></span></div>
+      <div class="deity-symbols">
+        <span class="alch-symbol">🜂</span>
+        <svg class="compass-mini" viewBox="0 0 28 28">
+          <circle cx="14" cy="14" r="12" fill="none" stroke="#c4824a44" stroke-width="0.8"/>
+          <circle cx="14" cy="14" r="1.5" fill="#c4824a"/>
+          <polygon points="14,2 16,14 14,11 12,14" fill="#c4824a"/>
+          <polygon points="14,26 16,14 14,17 12,14" fill="#3d3830"/>
+          <text x="14" y="6.5" text-anchor="middle" font-size="3.5" fill="#c4824a" font-family="serif">N</text>
+        </svg>
+      </div>
+    </button>
+    <div class="deity-memory" id="mem-isis"></div>
+
+    <button class="deity-btn" data-deity="afrodita" onclick="setDeidad('afrodita')">
+      <div class="deity-header"><div class="deity-dot"></div><div class="deity-name">AFRODITA</div><span class="deity-amp-dot" id="amp-afrodita"></span></div>
+      <div class="deity-symbols">
+        <span class="alch-symbol">🜁</span>
+        <svg class="compass-mini" viewBox="0 0 28 28">
+          <circle cx="14" cy="14" r="12" fill="none" stroke="#b8a0cc44" stroke-width="0.8"/>
+          <circle cx="14" cy="14" r="1.5" fill="#b8a0cc"/>
+          <polygon points="26,14 14,12 17,14 14,16" fill="#b8a0cc"/>
+          <polygon points="2,14 14,12 11,14 14,16" fill="#3d3830"/>
+          <text x="23.5" y="16" text-anchor="middle" font-size="3.5" fill="#b8a0cc" font-family="serif">E</text>
+        </svg>
+      </div>
+    </button>
+    <div class="deity-memory" id="mem-afrodita"></div>
+
+    <button class="deity-btn" data-deity="lilith" onclick="setDeidad('lilith')">
+      <div class="deity-header"><div class="deity-dot"></div><div class="deity-name">LILITH</div><span class="deity-amp-dot" id="amp-lilith"></span></div>
+      <div class="deity-symbols">
+        <span class="alch-symbol">🜄</span>
+        <svg class="compass-mini" viewBox="0 0 28 28">
+          <circle cx="14" cy="14" r="12" fill="none" stroke="#5a9bc444" stroke-width="0.8"/>
+          <circle cx="14" cy="14" r="1.5" fill="#5a9bc4"/>
+          <polygon points="14,26 12,14 14,17 16,14" fill="#5a9bc4"/>
+          <polygon points="14,2 12,14 14,11 16,14" fill="#3d3830"/>
+          <text x="14" y="25.5" text-anchor="middle" font-size="3.5" fill="#5a9bc4" font-family="serif">S</text>
+        </svg>
+      </div>
+    </button>
+    <div class="deity-memory" id="mem-lilith"></div>
+
+    <button class="deity-btn" data-deity="artemisa" onclick="setDeidad('artemisa')">
+      <div class="deity-header"><div class="deity-dot"></div><div class="deity-name">ARTEMISA</div><span class="deity-amp-dot" id="amp-artemisa"></span></div>
+      <div class="deity-symbols">
+        <span class="alch-symbol">🜃</span>
+        <svg class="compass-mini" viewBox="0 0 28 28">
+          <circle cx="14" cy="14" r="12" fill="none" stroke="#7aad6a44" stroke-width="0.8"/>
+          <circle cx="14" cy="14" r="1.5" fill="#7aad6a"/>
+          <polygon points="2,14 14,16 11,14 14,12" fill="#7aad6a"/>
+          <polygon points="26,14 14,16 17,14 14,12" fill="#3d3830"/>
+          <text x="4.5" y="16" text-anchor="middle" font-size="3.5" fill="#7aad6a" font-family="serif">O</text>
+        </svg>
+      </div>
+    </button>
+    <div class="deity-memory" id="mem-artemisa"></div>
+  </aside>
+
+  <main class="panel-chat">
+    <div class="chat-header">
+      <div class="active-deity-name" id="active-name" style="color:var(--tutu)">TUTU</div>
+      <span class="active-deity-symbol" id="active-symbol">☽</span>
+      <svg class="active-deity-compass" id="active-compass" viewBox="0 0 36 36">
+        <circle cx="18" cy="18" r="16" fill="none" stroke="#c4a96a44" stroke-width="1"/>
+        <circle cx="18" cy="18" r="2.5" fill="#c4a96a"/>
+      </svg>
+      <div class="active-deity-attrs" id="active-attrs">hijo del humo · iniciador</div>
+      <button class="cerrar-ritual-btn" onclick="cerrarRitual()" title="Cerrar ritual con esta deidad">CERRAR RITUAL</button>
+    </div>
+    <div class="chat-messages" id="messages" role="log" aria-live="polite" aria-label="Mensajes del chat con la deidad">
+        <div class="msg msg-deity" style="--d-color:var(--tutu)">
+          <div class="msg-label">TUTU  ☽</div>
+          <div class="msg-bubble">El humo se eleva. Estoy aquí.<br><br>Puedes hablar directamente — yo sentiré hacia quién dirigirte.<br>O invoca a una guardiana por nombre.<br><br>¿Qué trae tu mente esta noche?</div>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <div class="input-row">
+          <label for="msg-input" class="sr-only">Mensaje para la deidad</label>
+          <textarea id="msg-input" placeholder="Escribe tu consulta... o nombra a quien quieres invocar" rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)" aria-label="Mensaje para la deidad"></textarea>
+          <button class="send-btn" id="send-btn" onclick="enviar()" aria-label="Enviar mensaje a la deidad">INVOCAR</button>
+        </div>
+      <div class="input-hint">Enter para enviar · Shift+Enter para nueva línea · click en mensaje para quemarlo</div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-overlay" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onclick="if(event.target===this)closeModal()">
+  <div class="modal modal-grimorio">
+    <div class="modal-title" id="modal-title"> Grimorio</div>
+
+    <div class="grimorio-tabs">
+      <button class="grimorio-tab active" onclick="grimorioTab('entradas',this)">Entradas</button>
+      <button class="grimorio-tab" onclick="grimorioTab('decisiones',this)">Decisiones</button>
+      <button class="grimorio-tab" onclick="grimorioTab('nueva',this)">+ Nueva</button>
+    </div>
+
+    <div class="grimorio-panel" id="grimorio-entradas">
+      <div id="grimorio-lista" class="grimorio-lista">Cargando...</div>
+    </div>
+
+    <div class="grimorio-panel" id="grimorio-decisiones" style="display:none">
+      <div id="decisiones-lista" class="grimorio-lista">Cargando...</div>
+    </div>
+
+    <div class="grimorio-panel" id="grimorio-nueva" style="display:none">
+      <input type="text" id="m-titulo" placeholder="Título">
+      <select id="m-tipo"><option value="entrada">Entrada</option><option value="vision">Visión</option><option value="ritual">Ritual</option><option value="sigilo">Sigilo</option><option value="reflejo">Reflejo</option></select>
+      <select id="m-entidad"><option value="">Sin entidad</option><option value="kali">Kali</option><option value="tutu">Tutu</option><option value="isis">Isis</option><option value="afrodita">Afrodita</option><option value="lilith">Lilith</option><option value="artemisa">Artemisa</option></select>
+      <textarea id="m-contenido" placeholder="Escribe tu entrada..."></textarea>
+      <div class="modal-actions">
+        <button class="btn-save" onclick="guardarEntrada()">Guardar</button>
+      </div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:12px">
+      <button class="btn-cancel" onclick="closeModal()">Cerrar</button>
+    </div>
+  </div>
+</div>
