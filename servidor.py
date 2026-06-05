@@ -13,7 +13,6 @@ import os
 import json
 import time
 from pathlib import Path
-from typing import Optional
 from collections import defaultdict
 from threading import Lock
 
@@ -116,10 +115,10 @@ import sys
 sys.path.insert(0, str(BASE_DIR))
 
 from grimorio_base import (
-    DEIDADES, TUTU_SYSTEM, ARBOLES_DEIDADES,
+    DEIDADES, ARBOLES_DEIDADES,
     INVOCACIONES_DIRECTAS, sembrar_memoria_artemisa,
     CHAKRAS, ARBOL_VIDA_SEPHIROTH, ARBOL_MUERTE_QLIPHOTH,
-    CHAKRAS_ARTEMISA_SOCIAL, RUEDA_COLORES, RUEDA_COMO_CONTEXTO,
+    CHAKRAS_ARTEMISA_SOCIAL, RUEDA_COLORES,
 )
 from base_datos import (
     inicializar_db, guardar_decision, escribir_grimorio, leer_grimorio,
@@ -128,11 +127,16 @@ from base_datos import (
     guardar_carta_natal, leer_carta_natal,
     ProyectoRepo, ConversacionRepo, EsferaRepo,
 )
-from luna import luna_hoy, luna_como_contexto
-from tarot import ARCANOS, POSICIONES, carta_por_n, tirada_como_contexto
+from luna import luna_hoy
+from tarot import ARCANOS, POSICIONES, carta_por_n
 from astral import (
-    CIUDADES, calcular_carta_natal, carta_natal_como_contexto, KERYKEION_OK
+    CIUDADES, calcular_carta_natal, KERYKEION_OK
 )
+
+# Módulo de invocación IA (encapsula el proveedor tras una interface).
+from invocacion import invocador
+# Identidad de proyecto encapsulada (header, cifrado, proyecto-vs-legacy).
+from proyecto_contexto import ContextoProyecto
 
 # ── Inicializar ────────────────────────────────────────────────────────────
 inicializar_db()
@@ -146,80 +150,19 @@ for err in errores_config:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  CLIENTE GROQ
-# ═══════════════════════════════════════════════════════════════════════════
-
-class ClienteGroq:
-    def __init__(self):
-        self.api_key = Config.GROQ_API_KEY
-        self.model = Config.GROQ_MODEL
-        self._client = None
-
-    def _inicializar(self):
-        if self._client is None and self.api_key:
-            try:
-                from groq import Groq
-                self._client = Groq(api_key=self.api_key)
-            except ImportError:
-                raise ImportError(
-                    "Se necesita 'groq'. "
-                    "Ejecutá: pip install groq"
-                )
-
-    def chat(self, system: str, messages: list,
-             max_tokens: int | None = None,
-             temperature: float | None = None) -> str:
-        if not self.api_key:
-            return ("[Modo offline] No hay GROQ_API_KEY configurada. "
-                    "El servidor necesita una key de Groq para responder.")
-
-        self._inicializar()
-        max_tok = max_tokens or Config.GROQ_MAX_TOKENS
-        temp = temperature if temperature is not None else Config.GROQ_TEMPERATURE
-
-        msgs = [{"role": "system", "content": system}]
-        for m in messages:
-            role = "assistant" if m.get("role") == "assistant" else "user"
-            msgs.append({"role": role, "content": m.get("content", "")})
-
-        try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=msgs,
-                max_tokens=max_tok,
-                temperature=temp,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"[Error Groq: {e}]"
-
-
-groq_client = ClienteGroq()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 #  HELPER — PROYECTO DESDE HEADER
 # ═══════════════════════════════════════════════════════════════════════════
 
-PROYECTO_HEADER = "X-Project-Code"
+def _contexto() -> ContextoProyecto:
+    return ContextoProyecto.desde_headers(request.headers)
 
 
-def _obtener_proyecto() -> Optional[Proyecto]:
-    codigo = request.headers.get(PROYECTO_HEADER)
-    if not codigo:
-        return None
-    proyecto = Proyecto(codigo=codigo)
-    if not ProyectoRepo.existe(proyecto.hash):
-        return None
-    return proyecto
-
-
-def _proyecto_requerido(proyecto: Optional[Proyecto]):
-    if not proyecto:
-        return jsonify({
-            "error": f"Header {PROYECTO_HEADER} requerido o código inválido"
-        }), 401
-    ProyectoRepo.actualizar_actividad(proyecto.hash)
+def _proyecto_requerido(ctx: ContextoProyecto):
+    err = ctx.requerir()
+    if err:
+        datos, status = err
+        return jsonify(datos), status
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -266,22 +209,22 @@ def proyecto_nuevo():
 
 @app.route("/api/proyecto/verificar", methods=["POST"])
 def proyecto_verificar():
-    proyecto = _obtener_proyecto()
-    if not proyecto:
+    ctx = _contexto()
+    if not ctx.activo:
         return jsonify({"existe": False})
 
-    cifrado = ProyectoRepo.obtener_metadatos(proyecto.hash)
+    cifrado = ProyectoRepo.obtener_metadatos(ctx.hash)
     if not cifrado:
         return jsonify({"existe": False})
 
-    descifrado = Cifrador.descifrar(cifrado, proyecto.codigo)
+    descifrado = ctx.descifrar(cifrado)
     if not descifrado:
         return jsonify({"existe": False, "error": "código incorrecto"})
 
     metadatos = json.loads(descifrado)
     return jsonify({
         "existe": True,
-        "hash": proyecto.hash[:12],
+        "hash": ctx.hash[:12],
         "metadatos": metadatos,
     })
 
@@ -293,10 +236,11 @@ def proyecto_verificar():
 @app.route("/api/consultar", methods=["POST"])
 @_limitar_request()
 def consultar():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
+    proyecto = ctx.proyecto
 
     data = request.json
     if not isinstance(data, dict):
@@ -363,67 +307,17 @@ def consultar():
 
 
 def _tutu_decide(mensaje: str):
-    system = """Lee el mensaje del practicante y decide qué entidad debe responder.
-
-Entidades:
-- isis     → libertad, amor materno, pureza, vínculo herido
-- afrodita → claridad mental, calma, estados de conciencia, paz
-- lilith   → cambio urgente, tormenta, energía reprimida, pasión
-- artemisa → enraizarse, ancestros, naturaleza, colectivo, abundancia
-- tutu     → propósito, cuestionamiento interior, paradojas
-
-Responde SOLO con este JSON exacto, sin explicaciones ni markdown:
-{"deidad": "nombre", "estado": "cuerpo", "razon": "frase breve"}"""
-
-    texto = groq_client.chat(system, [{"role": "user", "content": mensaje}],
-                             max_tokens=64)
-
-    try:
-        inicio = texto.find("{")
-        fin = texto.rfind("}") + 1
-        if inicio >= 0 and fin > inicio:
-            d = json.loads(texto[inicio:fin])
-            return d.get("deidad", "tutu"), d.get("estado", "cuerpo"), \
-                   d.get("razon", "")
-    except Exception:
-        pass
-    return "tutu", "alma", "decisión interna"
+    return invocador.decidir_entidad(mensaje)
 
 
 def _invocar_deidad(nombre: str, mensaje: str, proyecto: Proyecto) -> str:
     if nombre not in DEIDADES:
         return f"Entidad desconocida: {nombre}"
-
-    memoria = ConversacionRepo.cargar(proyecto.hash, nombre)
-    ConversacionRepo.guardar(proyecto.hash, nombre, "user", mensaje)
-    memoria.append({"role": "user", "content": mensaje})
-
-    system = (DEIDADES[nombre]["system_prompt"]
-              + luna_como_contexto() + RUEDA_COMO_CONTEXTO)
-
-    try:
-        carta_cifrada = ProyectoRepo.obtener_carta_natal(proyecto.hash)
-        if carta_cifrada:
-            datos_carta = Cifrador.descifrar(carta_cifrada, proyecto.codigo)
-            if datos_carta:
-                system += carta_natal_como_contexto(json.loads(datos_carta))
-    except Exception:
-        pass
-
-    texto = groq_client.chat(system=system, messages=memoria, max_tokens=1024)
-    ConversacionRepo.guardar(proyecto.hash, nombre, "assistant", texto)
-    return texto
+    return invocador.invocar_deidad(nombre, mensaje, proyecto).texto
 
 
 def _invocar_tutu(mensaje: str, proyecto: Proyecto) -> str:
-    memoria = ConversacionRepo.cargar(proyecto.hash, "tutu")
-    ConversacionRepo.guardar(proyecto.hash, "tutu", "user", mensaje)
-    memoria.append({"role": "user", "content": mensaje})
-
-    system = TUTU_SYSTEM + luna_como_contexto() + RUEDA_COMO_CONTEXTO
-    texto = groq_client.chat(system=system, messages=memoria, max_tokens=1024)
-    ConversacionRepo.guardar(proyecto.hash, "tutu", "assistant", texto)
-    return texto
+    return invocador.invocar_tutu(mensaje, proyecto).texto
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -442,7 +336,7 @@ def get_esferas():
 
 @app.route("/api/esferas", methods=["POST"])
 def post_esferas():
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     d = request.json
     tipo = d.get("tipo", "").strip()
     clave = d.get("clave", "").strip()
@@ -456,7 +350,7 @@ def post_esferas():
             tipo=tipo,
             clave_unica=clave,
             metadata=metadata,
-            proyecto_hash=proyecto.hash if proyecto else None,
+            proyecto_hash=ctx.hash,
         )
         return jsonify({"ok": True, "esfera": resultado})
     except ValueError as e:
@@ -541,7 +435,7 @@ def get_eje_del_mundo():
 @app.route("/api/astral/calcular", methods=["POST"])
 @_limitar_request()
 def post_calcular_natal():
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
 
     if not KERYKEION_OK:
         return jsonify({"error": "kerykeion no instalado"}), 500
@@ -571,12 +465,10 @@ def post_calcular_natal():
     if "error" in carta:
         return jsonify(carta), 400
 
-    if proyecto:
-        cifrado = Cifrador.cifrar(
-            json.dumps(carta), proyecto.codigo
-        )
+    if ctx.activo:
+        cifrado = ctx.cifrar(json.dumps(carta))
         ProyectoRepo.guardar_carta_natal(
-            proyecto.hash, cifrado,
+            ctx.hash, cifrado,
             nombre=d.get("nombre", "Consultante")
         )
     else:
@@ -593,13 +485,13 @@ def post_calcular_natal():
 
 @app.route("/api/astral/guardada", methods=["GET"])
 def get_natal_guardada():
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
 
-    if proyecto:
-        cifrado = ProyectoRepo.obtener_carta_natal(proyecto.hash)
+    if ctx.activo:
+        cifrado = ProyectoRepo.obtener_carta_natal(ctx.hash)
         if not cifrado:
             return jsonify({"existe": False})
-        datos_str = Cifrador.descifrar(cifrado, proyecto.codigo)
+        datos_str = ctx.descifrar(cifrado)
         if not datos_str:
             return jsonify({"existe": False})
         datos = json.loads(datos_str)
@@ -642,7 +534,7 @@ def get_arcanos():
 @app.route("/api/tarot/leer/<entidad>", methods=["POST"])
 @_limitar_request()
 def tarot_leer(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
     d = request.json
     if not isinstance(d, dict):
@@ -651,57 +543,11 @@ def tarot_leer(entidad):
     if not isinstance(cartas, list) or len(cartas) > 10:
         return jsonify({"error": "cartas debe ser lista de máx 10"}), 400
 
-    if entidad == "tutu":
-        system = TUTU_SYSTEM
-    elif entidad in DEIDADES:
-        system = DEIDADES[entidad]["system_prompt"]
-    else:
+    if entidad != "tutu" and entidad not in DEIDADES:
         return jsonify({"error": "entidad desconocida"}), 400
 
-    contexto = tirada_como_contexto(cartas)
-    system += luna_como_contexto()
-
-    if proyecto:
-        try:
-            carta_cifrada = ProyectoRepo.obtener_carta_natal(proyecto.hash)
-            if carta_cifrada:
-                datos_str = Cifrador.descifrar(carta_cifrada, proyecto.codigo)
-                if datos_str:
-                    system += carta_natal_como_contexto(json.loads(datos_str))
-        except Exception:
-            pass
-    else:
-        carta = leer_carta_natal()
-        if carta and carta.get("datos"):
-            try:
-                datos = json.loads(carta["datos"])
-                system += carta_natal_como_contexto(datos)
-            except Exception:
-                pass
-
-    system += (
-        "\n\nEl consultante ha extendido una tirada de tres cartas ante ti. "
-        "Lee la tirada completa desde tu naturaleza — une el pasado, el presente "
-        "y el futuro en una sola voz. Considera la luna de hoy y, si la conoces, "
-        "su carta natal. Habla con profundidad pero sin exceder un párrafo o dos."
-    )
-
-    prompt = f"{contexto}\n\nLee mi tirada."
-    respuesta = groq_client.chat(system=system,
-                                 messages=[{"role": "user", "content": prompt}],
-                                 max_tokens=700)
-
-    if proyecto:
-        ConversacionRepo.guardar(proyecto.hash, entidad, "user",
-                                 "[Tirada de tarot]")
-        ConversacionRepo.guardar(proyecto.hash, entidad, "assistant",
-                                 respuesta)
-    else:
-        from base_datos import guardar_mensaje
-        guardar_mensaje(entidad, "user", "[Tirada de tarot]")
-        guardar_mensaje(entidad, "assistant", respuesta)
-
-    return jsonify({"respuesta": respuesta, "entidad": entidad})
+    respuesta = invocador.leer_tarot(entidad, cartas, ctx.proyecto)
+    return jsonify({"respuesta": respuesta.texto, "entidad": entidad})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -745,37 +591,25 @@ def get_stats():
 
 @app.route("/api/memoria/<entidad>", methods=["GET"])
 def get_memoria(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
-
-    if proyecto:
-        memoria = ConversacionRepo.cargar(proyecto.hash, entidad)
-        return jsonify(memoria[-12:])
-
-    from base_datos import cargar_memoria as cargar_memoria_legacy
-    memoria = cargar_memoria_legacy(entidad)
+    memoria = ctx.cargar_memoria(entidad)
     return jsonify(memoria[-12:])
 
 
 @app.route("/api/cerrar/<entidad>", methods=["POST"])
 def cerrar_ritual(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
-
-    if proyecto:
-        n = ConversacionRepo.limpiar(proyecto.hash, entidad)
-        return jsonify({"ok": True, "intercambios": n})
-
-    from base_datos import limpiar_memoria as limpiar_memoria_legacy
-    n = limpiar_memoria_legacy(entidad)
+    n = ctx.limpiar_memoria(entidad)
     return jsonify({"ok": True, "intercambios": n})
 
 
 @app.route("/api/mensajes/quemar", methods=["POST"])
 @_limitar_request()
 def quemar_mensaje():
-    proyecto = _obtener_proyecto()
-    if not proyecto:
+    ctx = _contexto()
+    if not ctx.activo:
         return jsonify({"error": "proyecto requerido"}), 401
     data = request.json
     if not isinstance(data, dict):
@@ -783,7 +617,7 @@ def quemar_mensaje():
     msg_id = data.get("id")
     if not isinstance(msg_id, int):
         return jsonify({"error": "id debe ser entero"}), 400
-    ok = ConversacionRepo.eliminar_mensaje(proyecto.hash, msg_id)
+    ok = ConversacionRepo.eliminar_mensaje(ctx.hash, msg_id)
     return jsonify({"ok": ok})
 
 
@@ -834,51 +668,14 @@ def post_quemar_sigilo(sid):
 
 @app.route("/api/sigilo/regalo/<entidad>", methods=["POST"])
 def post_regalo_sigilo(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
 
-    if proyecto:
-        memoria = ConversacionRepo.cargar(proyecto.hash, entidad)
-    else:
-        from base_datos import cargar_memoria as cargar_memoria_legacy
-        memoria = cargar_memoria_legacy(entidad)
-
-    contexto = ""
-    if memoria:
-        ultimos = memoria[-6:]
-        contexto = "\n".join(
-            f"{'Practicante' if m['role']=='user' else entidad.capitalize()}: "
-            f"{m['content'][:200]}"
-            for m in ultimos
-        )
-
-    if entidad == "tutu":
-        system = TUTU_SYSTEM
-    elif entidad in DEIDADES:
-        system = DEIDADES[entidad]["system_prompt"]
-    else:
+    if entidad != "tutu" and entidad not in DEIDADES:
         return jsonify({"error": "entidad desconocida"}), 400
 
-    system += luna_como_contexto()
-    system += (
-        "\n\nEl practicante te pide un sigilo. Basándote en lo que han hablado, "
-        "regálale una intención breve y poderosa (máximo 8 palabras) que capture "
-        "lo que su alma necesita ahora. Responde SOLO con la intención en mayúsculas, "
-        "sin comillas ni explicación. Ejemplo: VEO CON CLARIDAD MI CAMINO"
-    )
-
-    prompt = (f"Conversación reciente:\n{contexto}\n\nDame la intención del sigilo."
-              if contexto else
-              "Dame una intención de sigilo para quien apenas llega.")
-
-    intencion = groq_client.chat(
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=40,
-    )
-    intencion = intencion.strip().strip('"').strip("'").upper()
-    intencion = intencion.split("\n")[0][:60]
-
+    memoria = ctx.cargar_memoria(entidad)
+    intencion = invocador.generar_intencion_sigilo(entidad, memoria)
     return jsonify({"intencion": intencion, "entidad": entidad})
 
 
@@ -958,13 +755,7 @@ def handle_exception(e):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _verificar_groq():
-    if not Config.GROQ_API_KEY:
-        return False, "GROQ_API_KEY no configurada"
-    try:
-        groq_client._inicializar()
-        return True, f"API key configurada · modelo: {Config.GROQ_MODEL}"
-    except Exception as e:
-        return False, str(e)
+    return invocador.cliente_ia.verificar()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
