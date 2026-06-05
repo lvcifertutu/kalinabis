@@ -9,9 +9,10 @@ dist/
 build/
 .DS_Store
 node_modules/
-.agents/
-graphify-out/
-kalinabis/
 *.log
 *.png
-extracted.js
+front_terminal/
+graphify-out/
+kalinabis/
+.agents/
+skills-lock.json
