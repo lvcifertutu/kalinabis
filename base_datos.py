@@ -9,66 +9,32 @@
 #  Sin cambios en el resto del código — misma API para ambos.
 # ═══════════════════════════════════════════════════════════════════════════
 
-import os
 import json
 from datetime import datetime
-from pathlib import Path
-from contextlib import contextmanager
 
-# ── Detectar modo ──────────────────────────────────────────────────────────
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-MODO_PG      = bool(DATABASE_URL)
-DB_PATH      = Path(__file__).parent / "grimorio.db"
+from persistencia import ADAPTADOR, DATABASE_URL, DB_PATH
 
-if MODO_PG:
-    import psycopg2
-    import psycopg2.extras
-    # Render entrega postgres:// pero psycopg2 necesita postgresql://
-    _url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-else:
-    import sqlite3
+# El dialecto (SQLite/Postgres) vive en persistencia.py detrás del adapter.
+MODO_PG = ADAPTADOR.es_postgres
 
 print(f"[DB] Modo: {'PostgreSQL' if MODO_PG else 'SQLite'}")
 
 
-# ── Conexión y cursor ──────────────────────────────────────────────────────
+# ── Conexión y cursor (delegan en el adapter de persistencia) ───────────────
 
-@contextmanager
 def _conexion():
-    """Context manager que devuelve (con, cur) y hace commit + close."""
-    if MODO_PG:
-        con = psycopg2.connect(_url)
-        cur = con.cursor()
-        try:
-            yield con, cur
-            con.commit()
-        finally:
-            cur.close()
-            con.close()
-    else:
-        con = sqlite3.connect(DB_PATH)
-        cur = con.cursor()
-        try:
-            yield con, cur
-            con.commit()
-        finally:
-            cur.close()
-            con.close()
+    """Context manager (con, cur): commit + close. Lo provee el adapter."""
+    return ADAPTADOR.conexion()
 
 
 def _ph(n: int = 1) -> str:
-    """
-    Placeholder para parámetros:
-      PostgreSQL → %s %s %s
-      SQLite     → ?, ?, ?
-    """
-    p = "%s" if MODO_PG else "?"
-    return ", ".join([p] * n)
+    """Placeholders de parámetros según el motor (`?` SQLite / `%s` Postgres)."""
+    return ADAPTADOR.placeholder(n)
 
 
 def _serial() -> str:
     """Tipo de columna auto-incremental según el motor."""
-    return "SERIAL" if MODO_PG else "INTEGER"
+    return ADAPTADOR.tipo_serial()
 
 
 # ── Inicialización ─────────────────────────────────────────────────────────
@@ -420,12 +386,8 @@ def guardar_sigilo(intencion: str, imagen: str, entidad: str = None,
             f"VALUES ({p})",
             (intencion, imagen, entidad, 0, origen, datetime.now().isoformat())
         )
-        # Recuperar el id recién insertado
-        if MODO_PG:
-            cur.execute("SELECT lastval()")
-        else:
-            cur.execute("SELECT last_insert_rowid()")
-        return cur.fetchone()[0]
+        # Recuperar el id recién insertado (el adapter sabe cómo)
+        return ADAPTADOR.id_ultimo_insertado(cur)
 
 
 def leer_sigilos(limite: int = 50) -> list:
