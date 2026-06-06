@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 7860
 
-CMD ["gunicorn", "servidor:app", "--bind", "0.0.0.0:7860"]
+CMD ["gunicorn", "servidor:app", "--bind", "0.0.0.0:7860", "--timeout", "120", "--workers", "2"]

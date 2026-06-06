@@ -11,7 +11,7 @@ async function enviar() {
   try {
     const resultado = await invocarAPI(msg, selectedDeidad);
     removeLoadingMessage(loadingId);
-    const deidad = resultado.deidad || selectedDeidad || 'tutu';
+    const deidad = resultado.entidad || selectedDeidad || 'tutu';
     const meta   = DEIDADES_META[deidad];
     addMessageTypewriter('deity', resultado.respuesta, `${deidad.toUpperCase()}  ${meta.symbol}`, deidad);
     if (sonidoOn) campanilla();

@@ -11,7 +11,6 @@ build/
 node_modules/
 *.log
 *.png
-front_terminal/
 graphify-out/
 kalinabis/
 .agents/

@@ -55,7 +55,9 @@ class TestValidacion(BaseTest):
         self.assertEqual(r.status_code, 400)
 
     def test_ruta_inexistente_devuelve_404(self):
-        r = self.client.get("/api/noexiste")
+        # Path no-api: el handler 404 responde JSON. (Los /api/* desconocidos
+        # dan 405 por el catch-all OPTIONS de CORS, igual que en producción.)
+        r = self.client.get("/noexiste")
         self.assertEqual(r.status_code, 404)
         self.assertIn("error", r.get_json())
 
@@ -224,6 +226,172 @@ class TestEndpointsLectura(BaseTest):
         r = self.client.post("/api/bosque/ciclo")
         self.assertEqual(r.status_code, 200)
         self.assertIn("actualizadas", r.get_json())
+
+
+class TestFeatures(BaseTest):
+    """Endpoints de features Fase 1/2/3 (runas, gnosis, iching, geomancia,
+    servitors, discordia, sync, rayos, paradigms)."""
+
+    # ── PURO (GET, sin proyecto) ───────────────────────────────────────
+
+    def test_runas_lista(self):
+        r = self.client.get("/api/runas/lista")
+        self.assertEqual(r.status_code, 200)
+
+    def test_gnosis_metodos(self):
+        self.assertEqual(self.client.get("/api/gnosis/metodos").status_code, 200)
+
+    def test_iching_hexagramas(self):
+        r = self.client.get("/api/iching/hexagramas")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.get_json()), 64)
+
+    def test_geomancia_figuras(self):
+        self.assertEqual(self.client.get("/api/geomancia/figuras").status_code, 200)
+
+    def test_rayos_preguntas(self):
+        r = self.client.get("/api/rayos/preguntas")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("preguntas", r.get_json())
+
+    def test_rayos_catalogo(self):
+        r = self.client.get("/api/rayos/catalogo")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("rayos", r.get_json())
+
+    def test_paradigm_catalogo(self):
+        r = self.client.get("/api/paradigm/catalogo")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("paradigmas", r.get_json())
+
+    # ── Divinación con IA (requieren proyecto) ─────────────────────────
+
+    def test_runas_tirada(self):
+        cod = self.app.crear_proyecto()
+        self.app.ia.encolar("La völva habla.")
+        r = self.client.post("/api/runas/tirada", json={"tipo": 3},
+                             headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("narrativa", r.get_json())
+
+    def test_iching_consulta(self):
+        cod = self.app.crear_proyecto()
+        self.app.ia.encolar("El hexagrama dice.")
+        r = self.client.post("/api/iching/consulta", json={"pregunta": "?"},
+                             headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("hexagrama_actual", r.get_json())
+
+    def test_geomancia_lectura(self):
+        cod = self.app.crear_proyecto()
+        self.app.ia.encolar("El juez dictamina.")
+        r = self.client.post("/api/geomancia/lectura",
+                             json={"pregunta": "?", "casa_foco": 1},
+                             headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("juez", r.get_json())
+
+    def test_gnosis_recomendar(self):
+        cod = self.app.crear_proyecto()
+        self.app.ia.encolar("Te conviene este método.")
+        r = self.client.post("/api/gnosis/recomendar",
+                             json={"deidad": "lilith", "fobias": []},
+                             headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("metodo", r.get_json())
+
+    def test_gnosis_guia(self):
+        cod = self.app.crear_proyecto()
+        self.app.ia.encolar("Respirá así.")
+        r = self.client.post("/api/gnosis/guia",
+                             json={"metodo": "meditacion_vacia"},
+                             headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 200)
+
+    def test_discord_oraculo(self):
+        cod = self.app.crear_proyecto()
+        self.app.ia.encolar("Eris ríe.")
+        r = self.client.get("/api/discord/oraculo", headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("mensaje", r.get_json())
+
+    def test_rayos_test(self):
+        cod = self.app.crear_proyecto()
+        self.app.ia.encolar("Tu rayo natal.")
+        r = self.client.post("/api/rayos/test", json={"respuestas": [3] * 8},
+                             headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("rayo", r.get_json())
+
+    def test_rayos_test_valida_8_respuestas(self):
+        cod = self.app.crear_proyecto()
+        r = self.client.post("/api/rayos/test", json={"respuestas": [3] * 7},
+                             headers=self.app.headers(cod))
+        self.assertEqual(r.status_code, 400)
+
+    def test_feature_sin_proyecto_devuelve_401(self):
+        r = self.client.post("/api/runas/tirada", json={"tipo": 3})
+        self.assertEqual(r.status_code, 401)
+
+    # ── Ciclos CRUD (USA-PROYECTO + repos) ─────────────────────────────
+
+    def test_servitors_ciclo_completo(self):
+        cod = self.app.crear_proyecto()
+        H = self.app.headers(cod)
+        # crear
+        r = self.client.post("/api/servitors/crear",
+                             json={"nombre": "Guardián", "funcion": "vigilar",
+                                   "forma": "niebla", "deidad_padre": "isis"},
+                             headers=H)
+        self.assertEqual(r.status_code, 200)
+        # lista
+        r = self.client.get("/api/servitors/lista", headers=H)
+        self.assertEqual(len(r.get_json()["servitors"]), 1)
+        # feed
+        r = self.client.post("/api/servitors/feed", json={"nombre": "Guardián"},
+                             headers=H)
+        self.assertEqual(r.status_code, 200)
+        # invocar (IA)
+        self.app.ia.encolar("Cumplo mi misión.")
+        r = self.client.post("/api/servitors/invocar",
+                             json={"nombre": "Guardián", "pregunta": "?"},
+                             headers=H)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("respuesta", r.get_json())
+        # disolver
+        r = self.client.post("/api/servitors/disolver",
+                             json={"nombre": "Guardián"}, headers=H)
+        self.assertTrue(r.get_json()["ok"])
+
+    def test_sync_ciclo(self):
+        cod = self.app.crear_proyecto()
+        H = self.app.headers(cod)
+        r = self.client.post("/api/sync/nueva",
+                             json={"signo": "veo cuervos", "dias": 7}, headers=H)
+        self.assertEqual(r.status_code, 200)
+        sid = r.get_json()["sync"]["id"]
+        r = self.client.get("/api/sync/lista", headers=H)
+        self.assertEqual(len(r.get_json()["syncs"]), 1)
+        r = self.client.post("/api/sync/confirmar",
+                             json={"id": sid, "nota": "pasó"}, headers=H)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.client.get("/api/sync/colectiva", headers=H).status_code, 200)
+
+    def test_paradigm_ciclo(self):
+        import servidor
+        pid = next(iter(servidor.PARADIGMAS))
+        cod = self.app.crear_proyecto()
+        H = self.app.headers(cod)
+        self.app.ia.encolar("Día 1 del paradigma.")
+        r = self.client.post("/api/paradigm/iniciar",
+                             json={"paradigma_id": pid}, headers=H)
+        self.assertEqual(r.status_code, 200)
+        r = self.client.get("/api/paradigm/estado", headers=H)
+        self.assertIsNotNone(r.get_json()["activo"])
+        self.app.ia.encolar("Check-in.")
+        r = self.client.post("/api/paradigm/checkin",
+                             json={"nota": "avanzo"}, headers=H)
+        self.assertEqual(r.status_code, 200)
 
 
 if __name__ == "__main__":
