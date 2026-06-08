@@ -230,6 +230,6 @@ P11 → clima real                        (enriquecimiento; puede ir en cualquie
 - `grimorio.html` sigue siendo **un solo archivo**
 - Sin usuarios, sin login, sin emails, sin IPs almacenadas
 - El código de proyecto nunca se guarda en claro
-- Toda invocación al LLM pasa por `ClienteGroq` (único punto de cambio de proveedor)
+- Toda invocación al LLM pasa por `invocacion/` (singleton `invocador`, adapters intercambiables — único punto de cambio de proveedor; `ia.py` quedó como shim de deprecación)
 - Migraciones de esquema deben preservar datos existentes
 - El sistema funciona sin internet y sin `GROQ_API_KEY`

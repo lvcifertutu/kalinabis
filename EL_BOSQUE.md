@@ -31,7 +31,7 @@ Principios de respeto que rigen todo el documento:
 
 ## 1. El principio: del catálogo al organismo
 
-Kalinabis nació con cinco entidades fijas escritas en código. El upgrade ya comenzó: el backend corre con **Gemini API**, los practicantes se identifican por **proyectos anónimos** (códigos de 4 palabras), y las **esferas colectivas** ya respiran con decaimiento (14/30/60 días). Pero el Bosque es el modelo que permite que **la comunidad haga crecer el sistema** sin que nadie imponga un canon desde arriba.
+Kalinabis nació con cinco entidades fijas escritas en código. El upgrade ya comenzó: el backend corre con **Groq API**, los practicantes se identifican por **proyectos anónimos** (códigos de 4 palabras), y las **esferas colectivas** ya respiran con decaimiento (14/30/60 días). Pero el Bosque es el modelo que permite que **la comunidad haga crecer el sistema** sin que nadie imponga un canon desde arriba.
 
 El marco teórico es la **autopoiesis** de Humberto Maturana y Francisco Varela (biólogos chilenos): un sistema vivo es el que se produce a sí mismo de forma continua y existe solo mientras logra seguir produciéndose. El Bosque de Kalinabis es autopoiético — vive mientras la comunidad lo sostiene; lo que deja de sostenerse, se disuelve. El orden no se impone: **emerge**.
 
@@ -370,9 +370,9 @@ El gnosticismo no es solo la fuente de la cara de Lilith (§10): su cosmología 
 
 ## 18. Puentes con el código existente (resumen técnico)
 
-Anclas del sistema. **Estado actual: backend funcional**, desplegado en Render, con Gemini como modelo de IA. Respetando "Lo que NO se debe romper" del CONSTITUTION:
+Anclas del sistema. **Estado actual: backend funcional**, desplegado en Render, con Groq como modelo de IA. Respetando "Lo que NO se debe romper" del CONSTITUTION:
 
-- **IA: Gemini API.** `ClienteGemini` en `servidor.py` usa `google-genai`. Modo offline graceful si no hay `GEMINI_API_KEY`. La capa es **intercambiable** (Gemini hoy; otros modelos después). Se inyectan contexto lunar (`luna_como_contexto`), rueda de colores y carta natal en cada llamada.
+- **IA: Groq API.** `ClienteGroq` en `ia.py` usa `groq`. Modo offline graceful si no hay `GROQ_API_KEY`. La capa es **intercambiable** (Groq hoy; otros modelos después). Se inyectan contexto lunar (`luna_como_contexto`), rueda de colores y carta natal en cada llamada.
 - **Identidad: proyectos anónimos.** Cada practicante crea un proyecto con un **código de 4 palabras** (generado o elegido). El código es la clave: se usa como header `X-Project-Code` en cada petición. Nunca se almacena en claro — solo el hash (SHA-256). Los datos se cifran con **AES-256-GCM** usando el código como llave. Sin usuarios, sin login, sin cookies, sin tracking. Si se pierde el código, se pierde el acceso.
 - **Entidades como datos.** Las 5 originales siguen en `DEIDADES` de `grimorio_base.py` (semilla canon). Cada entidad = un skill (bucle único). Las **caras masculinas** (§10) y la **firma planetaria** (§12) son atributos futuros de la entidad, no código nuevo embebido.
 - **Tablas implementadas:** proyectos · carta_natal_proyecto · esferas · marcas_esfera · conversaciones_proyecto · más las tablas legacy (grimorio, memoria, decisiones, sigilos). Total: 10+ tablas con PostgreSQL (producción) y SQLite (local).

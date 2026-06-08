@@ -639,15 +639,15 @@ def sembrar_memoria_artemisa(db_path=None):
     su árbol Yaxché, los chakras sociales y su rol de mente colectiva.
     Solo se ejecuta si Artemisa aún no tiene mensajes guardados.
     """
-    from base_datos import guardar_mensaje, cargar_memoria
+    from base_datos.legacy import ConversacionLegadoRepo as _CL
 
-    ya_tiene = bool(cargar_memoria("artemisa"))
+    ya_tiene = bool(_CL.cargar("artemisa"))
     if ya_tiene:
         return False
 
     semilla = ARBOLES_DEIDADES["artemisa"]["memoria_semilla"]
     for msg in semilla:
-        guardar_mensaje("artemisa", msg["role"], msg["content"], "fundacional")
+        _CL.guardar("artemisa", msg["role"], msg["content"], "fundacional")
     return True
 
 

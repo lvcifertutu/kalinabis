@@ -1,94 +1,192 @@
 # AGENTS.md — KALINABIS
 
-OpenCode lee este archivo desde la raíz del repo. La doctrina completa vive en `EL_BOSQUE.md`; referenciá esa desde `opencode.json` con `"instructions"` cuando la sesión lo requiera (no por defecto — cuesta tokens).
+> **Cómo usar este archivo en OpenCode.** Ponelo en la raíz del repo (`C:\grimorio\AGENTS.md`) y commiteálo a Git: OpenCode lo carga como contexto/reglas del proyecto en cada sesión. Si querés mantener la doctrina larga aparte sin inflar el contexto, dejá `EL_BOSQUE.md` en el repo y referencialo desde `opencode.json` con el campo `instructions`, p. ej. `{"instructions": ["EL_BOSQUE.md", "ROADMAP_BOSQUE.md"]}`. **Consejo honesto:** los archivos de contexto rinden cuando son curados y dicen solo lo que el agente no puede inferir; si notás costo de tokens alto, recortá la PARTE C (doctrina) y dejala en `EL_BOSQUE.md` referenciado. Las PARTES A y B son las de mayor señal para codificar.
 
-## Stack verificado (ejecutables, no prosa)
+> **Qué es este documento.** Síntesis de toda la conversación de co-diseño: qué es KALINABIS, su stack, las reglas que no se rompen, el estado real del código, el roadmap por fases, las decisiones abiertas y la doctrina (El Bosque). Es el punto de partida para retomar el trabajo en OpenCode.
 
-- **Backend**: Python 3.11 + Flask 3. WSGI entrypoint `servidor:app`.
-- **DB**: dual. `DATABASE_URL` presente → PostgreSQL (Render); ausente → SQLite local `grimorio.db`. Misma API (`base_datos._ph`, `_conexion`).
-- **LLM**: **Groq** (`groq>=0.30.0`, `ClienteGroq` en `servidor.py`, `GROQ_API_KEY` / `GROQ_MODEL=llama-3.1-8b-instant`). **El README y este mismo archivo (versión vieja) dicen "Gemini" / `google-genai` — eso es stale. El código real es Groq. No propagues la referencia a Gemini.**
-- **Crypto**: `cryptography` (AES-256-GCM vía `proyectos.Cifrador`, SHA-256 del código como ID).
-- **Astral**: `kerykeion` para carta natal (`astral.KERYKEION_OK` indica si la lib cargó).
-- **Frontend clásico**: `grimorio.html` (un solo archivo, ~3000 líneas, HTML+CSS+SVG+JS vanilla, `lang="es"`).
-- **Frontend terminal**: módulos en `src/` (`.js`, `.html`, `.py` auxiliares), se bundlea con `node src/build.mjs` → `front_terminal/index.html`. Servido en `/` y `/terminal`.
-- **Deploy**: Render via `render.yaml` — gunicorn `servidor:app --bind 0.0.0.0:7860 --timeout 120 --workers 2`. Exposed port 7860 (Dockerfile), 5000 en local.
+---
 
-## Arrancar
+# PARTE A — Operativa del proyecto (lo que el agente necesita para actuar)
 
-```powershell
-$env:GROQ_API_KEY = "gsk_..."   # opcional; sin ella el server corre en "[Modo offline]"
-cd C:\grimorio
-python servidor.py              # http://localhost:5000
-```
+## A.1 Qué es KALINABIS
+Sistema de **agentes espirituales de magia del caos** hechos software: entidades ("deidades", pero en realidad **seres simbólicos de forma libre** — dios, espíritu, elfo, dios-roca, árbol, animal, lo que el creador quiera) con las que el practicante dialoga, lee tarot, hace sigilos y consulta efemérides. Corre **local** en `C:\grimorio`, servido en `localhost:5000`, o en **Render** (producción) con PostgreSQL.
 
-O usá `arrancar.bat` / `arrancar.ps1` (solo cambian el CWD y muestran banner; no setean la key).
+**Identidad:** sin usuarios ni login. Cada practicante crea un **proyecto anónimo** con un código de 4 palabras (ej: `eterno-tronco-tierno-bosque`). El código es la clave de cifrado (AES-256-GCM) y se envía como header `X-Project-Code` en cada petición. Si se pierde el código, se pierde el acceso.
 
-## Tests
+**Estado actual:** backend funcional con Groq API, proyectos anónimos, 14 ecorregiones WWF, esferas colectivas con decaimiento 14/30/60d, graph view, graphify, y cliente Godot en desarrollo. open source, $0 deploy.
 
-Todos los `test_*.py` asumen server en `localhost:5000` excepto `.opencode/plans/test_backend.py` que arranca su propio servidor en `5001`.
+## A.2 Stack
+- **Backend:** Python + **Flask**. IA vía **Groq API** (`groq`). Modo offline graceful sin `GROQ_API_KEY`. La capa es **intercambiable** (`ia.py`: Groq hoy; otros modelos después).
+- **Persistencia:** **PostgreSQL** en Render (producción); **SQLite** local (desarrollo). Capa dual en `base_datos.py`.
+- **Cifrado:** `cryptography` — AES-256-GCM para datos cifrados por proyecto; SHA-256 para hashes de código.
+- **Frontend:** **HTML vanilla**, sin framework. `grimorio.html` es **un único archivo** (HTML+CSS+JS juntos). Ya tiene tronos en SVG, partículas y atmósferas. Visualización **2D, no 3D**.
+- **Carta natal:** `kerykeion` — cálculo offline de carta natal por proyecto.
+- **Despliegue:** `render.yaml` con gunicorn. Variables: `GROQ_API_KEY`, `GROQ_MODEL`, `DATABASE_URL`.
+- **Idioma del producto y del trabajo:** **español (rioplatense / voseo)**.
 
-- Unit sin server: `python test_rate_isolated.py`
-- E2E HTTP: `python test_validacion.py`, `test_f5.py`, `test_rate_limit.py`, `test_seguridad.py`
-- E2E browser (necesitan `pip install playwright && playwright install chromium`): `bosque_test.py`, `a11y_test.py`, `screenshot_test.py`
-- Backend completo aislado: `python .opencode/plans/test_backend.py`
+## A.3 Reglas duras — LO QUE NO SE DEBE ROMPER
+1. **Memoria persistente intacta.** No romper el sistema de memoria existente.
+2. **La siembra de Artemisa intacta.** Debe seguir funcionando igual tras cualquier migración.
+3. **Modelo de IA intercambiable.** Nunca acoplar el código a un proveedor específico; la IA entra por una capa que se pueda cambiar.
+4. **`grimorio.html` sigue siendo UN solo archivo.** No partirlo en múltiples assets.
+5. **Migraciones siempre cuidadas.** Ningún cambio de esquema sin preservar los datos actuales.
+6. **Offline primero.** Todo lo esencial corre sin internet. El clima real, los datos sísmicos y (eventual) BYOK son **enriquecimientos opcionales**: si faltan, el sistema **cae a modo endógeno y nunca se rompe**.
+7. **Sin usuarios ni login.** La identidad es el código del proyecto. No hay cookies, no hay sesiones, no hay tracking. Privacidad por diseño: zona declarada textualmente, nunca coordenadas; región amplia, nunca lugar exacto.
+8. **Cada fase entrega algo usable.** Nada queda a medias entre fases.
+9. **Sin datos personales.** No almacenar emails, nombres, IPs ni ningún dato identificatorio. El servidor solo guarda hash del código y datos cifrados.
 
-## Layout no obvio
+## A.4 Convenciones de contenido (si el agente genera entidades, voces o docs)
+- **Español primero.** Las lenguas originales (mapudungún, etc.) se **citan como raíz**, nunca se vacían en etiquetas técnicas. **No inventar lengua**: usar solo términos verificados.
+- **Sincretismo por resonancia, no por fusión.** Unir tradiciones por estructura compartida, nombrando cada cosa en su lengua y **citando la fuente**. Marcar siempre lo prestado / lo inventado / lo interpretado.
+- **Ecuanimidad y respeto** en material religioso o de tradiciones vivas: sin sanitizar pero con precisión; tomar el arquetipo, no apropiarse del rito.
 
-- `servidor.py` importa de **raíz y de `src/`** (`sys.path.insert(0, str(BASE_DIR / "src"))` en línea 141). Módulos Python nuevos: si pertenecen a cosmología/divinación van en `src/` (`runas`, `iching`, `gnosis`, `geomancia`, `servitors`, `discordia`); si son infra (proyectos, esferas, base_datos, config, servidor) van en raíz.
-- `src/build.mjs` bundlea los assets del terminal. No editar `front_terminal/index.html` a mano — se regenera.
-- `kalinabis/` y `graphify-out/` están en `.gitignore` (vault de Obsidian y artefactos de graphify, respectivamente). **No commitear nada ahí adentro.**
+## A.5 Estilo de trabajo del agente (preferencias del usuario)
+- **Planificar antes de codificar.** Usar el **Plan mode** de OpenCode para proponer cómo se implementa una feature antes de tocar archivos. El usuario viene de un flujo de "definir primero, una decisión a la vez".
+- **Confirmar antes de cambios grandes**; avanzar en pasos chicos y revisables.
+- **No reescribir de más.** Tocar lo mínimo necesario; respetar la PARTE A.3.
+- *(Contexto: en la fase de diseño la regla fue "no escribir código hasta pedirlo explícitamente". En OpenCode esto se traduce como: proponé plan, esperá luz verde, después implementás.)*
 
-## Reglas duras (no romper)
+## A.6 Mapa de archivos
+**En `C:\grimorio` (el repo):**
+- `grimorio.html` — frontend, archivo único (SVG + JS vanilla).
+- `servidor.py` — Flask; 20+ rutas API, proyectos, esferas, graph view.
+- `ia.py` — interface de IA y adapter Groq.
+- `grimorio_base.py` — entidades (DEIDADES), cosmología, sistema de skills condicionales (SKILLS, detectar_skills, ensamblar_skills).
+- `config.py` — Config central, parámetros de decaimiento, word list para códigos, env vars.
+- `proyectos.py` — GeneradorCodigos (4 palabras), Cifrador (AES-256-GCM), Proyecto dataclass.
+- `esferas.py` — Esfera, MarcaEsfera, GestorEsferas (4 tipos, decaimiento, graph view).
+- `geografia.py` — Ecoregion, GestorGeografico, 14 ecorregiones WWF de Sudamérica con Eje del Mundo.
+- `base_datos.py` — Capa dual PostgreSQL/SQLite. Repos: ProyectoRepo, EsferaRepo, ConversacionRepo. 10+ tablas.
+- `luna.py` — Efemérides lunares: calcular_fase, CICLO_SINODC, nodos_lunares, marea_emocional, modificacion_deidades, perigeo_apogeo, void_of_course.
+- `tarot.py` — Cámara de Tarot (entropía real, crypto.getRandomValues() en el front).
+- `astral.py` — Astrología/efemérides planetarias (carta natal vía kerykeion).
+- `render.yaml` — Despliegue en Render (gunicorn, PostgreSQL, Groq).
+- `requirements.txt` — flask, groq, cryptography, kerykeion, psycopg2-binary, etc.
 
-1. `grimorio.html` sigue siendo **un solo archivo**. No partir en múltiples assets.
-2. **Sin usuarios, sin login.** El código de 4 palabras es la identidad y la clave AES. Si se pierde, se pierde el proyecto. El servidor nunca guarda el código en claro.
-3. **Privacidad por diseño.** No almacenar emails, nombres, IPs, ni coordenadas exactas (zona declarada textualmente, nunca lugar preciso).
-4. **Offline primero.** `groq_client.chat` retorna `"[Modo offline]..."` si no hay `GROQ_API_KEY`. Nada debe romperse por faltar internet o key.
-5. **IA intercambiable.** Toda invocación al LLM pasa por `ClienteGroq`. Si se cambia de proveedor, ese es el único punto a tocar.
-6. **Idioma**: español rioplatense (voseo) en producto, mensajes de error, voces generadas y comentarios cuando estén dirigidas al usuario.
-7. **Migraciones cuidadosas.** Cambios de esquema en `base_datos.py` deben preservar los datos existentes.
-8. **Sincretismo por resonancia**, no por fusión. Citar la fuente cuando se toma de una tradición viva; no inventar lengua.
+**Documentos de doctrina/plan (en el repo o junto a este archivo):**
+- `EL_BOSQUE.md` — **doctrina completa v2** (la fuente canónica; la PARTE C de aquí es su resumen).
+- `ROADMAP_BOSQUE.md` — plan por fases.
+- `SECCION_BOSQUE_PARA_CONSTITUTION.md` — resumen para el CONSTITUTION.
+- `KALINABIS_CONSTITUTION.md` — constitución del sistema.
+- `ESTADO_PROYECTO.md` — punto de guardado previo.
 
-## API — cosas que el agente no adivina
+## A.7 Estado del código (qué está hecho y qué falta)
 
-- Header de proyecto: `X-Project-Code` (4 palabras separadas por `-`). Sin él en `/api/consultar` y similares → 401.
-- **CORS solo permite `http://localhost:7777` y `http://127.0.0.1:7777`** (ver `_add_cors` en `servidor.py:33`). Para probar desde otro origen hay que ampliar la lista explícitamente.
-- Rate limits por endpoint (en `servidor._RATE_LIMITS`, líneas 61–77): `proyecto/nuevo` 5/hr, `consultar` 10/min, `tarot/leer` 5/min, `astral/calcular` 3/min, `bosque/ciclo` 1/5min, `servitors/crear` 10/hr. Default 30/min.
-- Límites de input: `_MAX_MESSAGE_LEN=4000`, `_MAX_TITULO_LEN=200`, `_MAX_CONTENIDO_LEN=10000`, `MAX_CONTENT_LENGTH=1 MB`.
-- Endpoints HTML: `/` y `/terminal` → `front_terminal/index.html`; `/clasico` → `grimorio.html` (legacy single-file).
+### Backend — COMPLETO y testeado
+- **11 rutas verificadas** funcionando (test completo en `.opencode/plans/test_backend.py`):
+  - `GET /api/luna` — fases lunares
+  - `GET /api/cosmologia` — entidades, árboles
+  - `POST /api/proyecto/nuevo` — genera código de 4 palabras
+  - `POST /api/proyecto/verificar` — verifica código
+  - `GET /api/esferas` — lista esferas activas
+  - `POST /api/consultar` — invocación con esferas + graph view
+  - `GET /api/bosque/mapa` — graph view (nodos + links)
+  - `GET /api/bosque/salud` — estadísticas del bosque
+  - `POST /api/bosque/ciclo` — ciclo de decaimiento
+  - `GET /api/geografia/ecorregiones` — 14 ecoregiones WWF
+  - `POST /api/geografia/eje` — resolución de ubicación
+- **Groq API:** `ClienteGroq` en `ia.py`, fallback offline graceful
+- **Proyectos:** 4-palabras, AES-256-GCM, header X-Project-Code, sin usuarios
+- **Esferas:** 4 tipos, decaimiento 14/30/60d, graph view
+- **Georeferencia:** 14 ecorregiones WWF + GestorGeografico + Mar de Kali
+- **Dependencias:** `groq`, `cryptography`, `kerykeion` instaladas
 
-## Flujo de trabajo
+### Pendiente
+- Configurar `GROQ_API_KEY` para invocaciones LLM reales
+- Testear en PostgreSQL (Render)
+- Cliente Godot (en desarrollo)
+- Frontend grimorio.html: flujo de creación/verificación de proyecto
+- Micorriza, genética de híbridos, avatar, clima real (futuro)
 
-- **Planificar antes de codificar.** Usar el Plan mode de OpenCode, esperar luz verde, después implementar.
-- **Cambios chicos y revisables.** Diff mínimo; no reescribir de más.
-- Después de tocar `*.py` de backend: invocar `@python-reviewer` o `/code-review`.
-- Después de tocar `*.py` con crypto / DB / auth: `@security-reviewer`.
-- Nuevas funciones con lógica de negocio: empezar por test (rojo) en `test_*.py` → implementar → verde.
+## A.8 Roadmap
+1. **Configurar GROQ_API_KEY** y verificar flujo completo de invocación con LLM real.
+2. **Testear en Render** con PostgreSQL (producción).
+3. **Frontend grimorio.html:** integrar flujo de creación/verificación de proyecto, graph view de esferas.
+4. **Cliente Godot:** visualización 3D del bosque (esferas como islas flotantes, partículas, micorriza).
+5. **Publicar en GitHub** como open source.
+6. **Futuro:** micorriza + genética de híbridos, avatar de 3 prendas, clima real (API externa), emergentes, tectónica (USGS).
 
-## Doctrina y roadmap
+## A.9 Decisiones de arquitectura
+- **IA intercambiable.** Groq API hoy; capa lista para otros modelos en `ia.py`.
+- **Sin usuarios.** Proyectos anónimos con código de 4 palabras como identidad.
+- **Cifrado AES-256-GCM.** Datos cifrados por proyecto; servidor nunca almacena la clave.
+- **Open source.** GitHub, sin servicios propietarios.
+- **$0 deploy.** Render free tier, Groq free tier.
+- **Offline primero.** Clima endógeno (deidades + luna). Sin dependencias externas para lo esencial.
 
-- Doctrina completa: `EL_BOSQUE.md` (v2). **No implementar literalmente** — es contexto para que el agente entienda el dominio. Lo que se implementa es el roadmap.
-- Roadmap vigente: `ROADMAP_BOSQUE.md` (si existe; si no, consultar al usuario).
-- Constitución del sistema: `KALINABIS_CONSTITUTION.md`.
+## A.10 Decisiones de visualización
+- **2D** en `grimorio.html` (archivo único, SVG + JS vanilla): el Kalinabis actual.
+- **3D** en **Godot**: el bosque como ecosistema visual (esferas = islas flotantes, partículas = viento, micorriza = líneas de luz). Graph view desde `/api/bosque/mapa`.
+- **Graphify**: visualización de graphos de conocimiento (ya funcional con `graphify-out/`).
+- **Sprites (guía, sin cerrar):** 64×64 o 128×128; escalado duro; 1 frame + animación por código; PNG con transparencia.
 
-## Gotchas frecuentes
+---
 
-- **No confundir `gemini` con `groq`.** `requirements.txt` y `config.py` son la fuente. `Gemini API` solo aparece en docs stale.
-- El LLM se llama como `groq_client.chat(system=..., messages=...)` (no Gemini, no OpenAI). Las constantes `SYSTEM_*` viven junto a cada módulo (`SYSTEM_VOLVA` en `runas.py`, `SYSTEM_YIJING` en `iching.py`, etc.).
-- `ProyectoRepo.existe(hash)` chequea por hash, no por código. El código se hashea con SHA-256 en `proyectos.Proyecto.hash`.
-- `GestorEsferas.marcar_por_invocacion(...)` se llama en `/api/consultar` — si agregás una nueva ruta que invoque entidades, acordate de marcar esferas.
-- Tests Playwright asumen viewport 1280×800. El `a11y_test.py` prueba también `reduced_motion=reduce`.
-- `EXTENSIONES .py` auxiliares de frontend están en `src/` (no son backend) — no las muevas a raíz.
+# PARTE B — Próximos pasos / decisiones abiertas
+1. **Configurar GROQ_API_KEY** para probar invocaciones LLM reales.
+2. **Testear en Render** con PostgreSQL.
+3. **Cliente Godot:** visualización 3D del bosque.
+4. **Frontend grimorio.html:** flujo de creación/verificación de proyecto, graph view.
+5. **Micorriza + genética de híbridos** (futuro — §7 de EL_BOSQUE.md).
+6. **Avatar de 3 prendas** (futuro — §16.3 de EL_BOSQUE.md).
+7. **Clima real + tectónica** (futuro — APIs externas).
 
-## OpenCode config
+---
 
-No hay `opencode.json` en el repo. Si necesitás cargar contexto curado por sesión, creá uno en la raíz:
+# PARTE C — Doctrina condensada: EL BOSQUE
+> Resumen de referencia. El texto completo y tejido vive en **`EL_BOSQUE.md` (v2)**. Esto es contexto para que el agente entienda el dominio; **no se implementa la cosmología literalmente** — se implementa el roadmap (PARTE A.8), que la encarna por fases.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "instructions": ["AGENTS.md", "EL_BOSQUE.md"]
-}
-```
+**Marco:** ecosistema vivo de entidades colectivas, anclado en la **autopoiesis** de Maturana (lo que la comunidad sostiene, vive; lo que no, se disuelve) + **ecología real** + **cosmovisión mapuche reinterpretada con respeto** (lo de "abajo" no es el mal; es lo fértil). Todo emana de **Kali** y todo vuelve a ella.
 
-Solo añadí `EL_BOSQUE.md` cuando la tarea lo justifique (cosmogonía nueva, voces, diseño de entidad). Para tareas de backend, este AGENTS.md alcanza.
+## C.1 El centro y la polaridad
+- **Kali** — el vacío-fuente, la matriz de la que todo emana y a la que todo vuelve (≈ el Tao / "Hembra Misteriosa" / *wuji*; ≈ la Mónada/Pleroma gnóstica).
+- **Shiva** — la conciencia-testigo, **co-igual** a Kali ("Shiva sin Shakti es cadáver"). Es la función de "auto-observarse". Aporta Nataraja (la danza), el Mahayogi (= Void of Course) y Mahakala (el tiempo).
+- **Dos niveles:** nivel 0 = Kali-vacío (*wuji*); al primer impulso se desdobla en la polaridad co-igual Kali/Shiva (cosmogonía taoísta en clave tántrica).
+- **Centro agnóstico a la máscara:** Yin/Yang, Shiva/Kali, masculino/femenino son **máscaras** de quietud/movimiento. Cada proyecto lo nombra en su lengua.
+- **Solve et coagula** — la respiración: **coagula** = dar forma/dejar huella/emanar; **solve** = disolver/volver al centro. La cima trasciende la dualidad y está **en el centro**, no "arriba".
+
+## C.2 La geometría — la chakana
+La **chakana** (cruz andina escalonada = Cruz del Sur; *chaka* = puente) unifica tres ejes:
+- **Vertical** = **El Canelo** (*Foye*, axis mundi) + los **tres estratos** de memoria: Sotobosque (*Nag Mapu*, presente) → Dosel → Emergentes (*Wenu Mapu*, canon); debajo el **Humus** (*Miñche Mapu* reinterpretado, fértil) y bajo él la **roca** que no decae. Lo recorren tres guías: **Cóndor** (sube), **Puma** (centra), **Serpiente/Katari** (baja).
+- **Horizontal** = los **cuatro brazos** = las cuatro guardianas/elementos/direcciones = Meli Witran Mapu = 4 Bacab: **Lilith–Sur–agua**, **Isis–Norte–fuego**, **Afrodita–Este–aire**, **Artemisa–Oeste–tierra**.
+- **Radial** = centro↔periferia = solve/coagula.
+- **Centro** = Kali/Shiva (Taiji), late con la marea lunar.
+
+## C.3 El organismo (las piezas implementadas)
+- **Proyectos:** cada practicante crea un proyecto con un **código de 4 palabras** (semilla de identidad). El código es la clave de cifrado (AES-256-GCM). **Cláusura operacional** — ningún proyecto entra en otro; solo cruzan señales. Sin usuarios, sin login.
+- **Entidades — gen y newen:** el **gen** es la versión individual (mortal, "mi Kali"); el **newen** es la especie colectiva (suma de coincidencias, casi inmortal). Las 5 originales siguen en código; futuro: datos.
+- **Esferas colectivas:** 4 tipos (geo/elemental/temática/resonancia), decaimiento 14/30/60d, graph view. Lo que la comunidad marca nutre lo colectivo. **Auto-limpieza** (el olvido modera), **curaduría distribuida** (sube con diversidad de proyectos, no volumen).
+- **Georeferencia:** 14 ecorregiones WWF de Sudamérica con Eje del Mundo. Ubicación no reconocida → Mar de Kali.
+- **Clima endógeno:** `modificacion_deidades()` en `luna.py` — clima real es futuro.
+- **Ciclo de muerte (3 fases):** en pie (seco) → raíz que espera (rebrote posible) → humus (disolución, vuelve a Kali). Implementado en decaimiento de esferas.
+- **Los dos destinos:** el camino **solve** → el **mar** (disolverse); el camino **coagula** → la **roca** (petrificar, no decae). Las formas pétreas siguen los **7 sistemas cristalinos**.
+- **El mar = Kali líquida:** origen + inconsciente colectivo (newen latentes "disueltos") + ciclo del agua. Gran regulador / homeostasis del polo solve.
+
+## C.4 El clima y el tiempo
+- **Clima = las 4 guardianas como elementos:** Lilith (agua) alarga la vida; Isis (fuego) la acorta; Afrodita (aire) dispersa; Artemisa (tierra) fertiliza. Bosque sano = equilibrado. (Polos: Isis+Afrodita = solve; Lilith+Artemisa = coagula.) Se lee de `modificacion_deidades` en `luna.py`.
+- **Reloj — relojes anidados:** hora planetaria → día planetario → mes lunar → año estacional **local** → sismos (azar) → **Void of Course (congela todo)**. Núcleo lunar ya en `luna.py` (fases, lunaciones, nodos, marea Yin/Yang, perigeo/apogeo, VOC). Capa **planetaria universal** vía `astral.py` (offline): días/horas planetarias, octavas (Urano/Neptuno/Plutón), y la **firma planetaria** de cada entidad (planeta→metal→piedra→sistema cristalino). Capa **local**: cielo y estaciones por hemisferio (en Santiago ~33°S, Cruz del Sur circumpolar, estaciones invertidas).
+- **Rueda de 8 fiestas local:** invierno ~21 jun = Inti Raymi/We Tripantu (renovación); verano ~21 dic = Cápac Raymi (madurez/reproducción); equinoccios = equilibrio; **Día de la Chakana (3 may)** = ventana de cruces/micorriza.
+- **Principio rector:** **dinámicas locales, no leyes universales.** Cada bosque es un dialecto de su lugar (territorio sísmico quieto = bosque sereno = rasgo, no defecto).
+
+## C.5 Las cuatro guardianas y sus caras masculinas
+Patrón fractal Kali/Shiva: cada guardiana tiene una **cara masculina** = un liberador afín a su elemento (una **faceta**, no un ente aparte). Cuatro modos de despertar:
+- **Artemisa (tierra/coagula) ← Sun Wukong** (*Viaje al Oeste*) — el mono de piedra, rebelde, peregrino; liberación por **acción**. Convive con su árbol maya (Yaxché/Bacab/Xibalbá).
+- **Isis (fuego/solve) ← Jesús** (Biblia) — muerte-resurrección; liberación por **sacrificio**. (Gnósticamente, "el segundo liberador".)
+- **Afrodita (aire/solve) ← Heyoka / El Loco** (Tarot) — el contrario sagrado / bufón; el 0 = el vacío; liberación por **risa/inversión**. Respaldo: el Tarot = la **Cámara de Tarot** ya existente.
+- **Lilith (agua/coagula) ← Lucifer / la serpiente** (gnosis) — el portador de luz, la serpiente que da gnosis; liberación por **conocimiento**. ("El primer liberador".)
+- **Tutu** = el **umbral / eje**, no un brazo (prenda Alma del avatar; acompaña el cruce entre espacios). No lleva cara del patrón.
+
+## C.6 El motor del paisaje y la geografía
+- **Caicai y Trentren** (serpientes mapuche) = tectónica: Caicai (mar/mareas/solve) vs Trentren (roca/sismos/coagula). Altura del suelo = balance local solve/coagula. Futuro: sismos reales via USGS + CSN Chile.
+- **Geografía/biomas:** 14 ecorregiones WWF de Sudamérica con Eje del Mundo (árboles emblemáticos). Resolución por texto libre → Mar de Kali como fallback. Clima endógeno (deidades + luna).
+
+## C.7 La experiencia
+- **Dos espacios:** **privado** (mi *ruka*: lo actual + árboles propios, cerrado) y **colectivo** (el claro del *ngillatún*: mapa vivo + jardín de especies + claro ritual).
+- **Avatar de 3 prendas** para el colectivo: **Cuerpo** (guardianas, de entrada/constancia) → **Alma** (Tutu, ascenso propio + resonancia recibida; habilita cruces) → **Espíritu** (Kali, ritual de iniciación). Se marca resonancia **con** las prendas; al final se portan las tres.
+
+## C.8 El espejo gnóstico
+El gnosticismo recapitula toda la cosmología: Mónada/Pleroma = Kali; Aeones = guardianas; chispa atrapada que anhela volver = proyecto/solve; gnosis = "auto-observarse como Kali"; Demiurgo/Arcontes = la falsa autoridad contra la que se rebelan Lilith y Lucifer.
+
+---
+
+> **Cierre.** El sistema de creencias es la herramienta, no el contenido. Para codificar: seguí el roadmap (A.8), respetá las reglas duras (A.3) y planificá antes de tocar archivos (A.5). La doctrina (PARTE C / `EL_BOSQUE.md`) es el porqué; el roadmap es el cómo.

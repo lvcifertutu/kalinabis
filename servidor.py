@@ -13,16 +13,25 @@ import os
 import json
 import time
 from pathlib import Path
-from typing import Optional
 from collections import defaultdict
 from threading import Lock
 
-from flask import Flask, request, jsonify, send_from_directory
+# Cargar variables de entorno desde .env.local
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env.local")
+
+from flask import Flask, request, jsonify, send_from_directory, make_response, Response
 
 from config import Config
 from proyectos import GeneradorCodigos, Cifrador, Proyecto
 from esferas import GestorEsferas
+from base_datos.esferas import (
+    EsferaRepo, RelacionRepo, EventoRepo, HumusRepo, OfrendaRepo, ConvergenciaRepo,
+    UMBRAL_CONVERGENCIA, VENTANA_CONVERGENCIA_H,
+    TIPOS_RELACION, _narrativa_evento,
+)
 from geografia import GestorGeografico
+from presentacion_deidades import formatear_presentacion
 
 BASE_DIR = Path(__file__).parent
 
@@ -30,24 +39,33 @@ app = Flask(__name__, static_folder=str(BASE_DIR))
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # 1 MB max por request
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  CORS — after_request para agregar headers a todas las respuestas
+# ═══════════════════════════════════════════════════════════════════════════
+
+import re as _re
+
+# El front Next puede correr en cualquier puerto 3000-3009 en dev.
+_ORIGEN_LOCAL = _re.compile(r"^http://(localhost|127\.0\.0\.1):\d+$")
+
+
 @app.after_request
-def _add_cors(response):
-    origin = request.headers.get("Origin", "")
-    if origin in ("http://localhost:7777", "http://127.0.0.1:7777"):
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Project-Code"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+def _agregar_cors(response: Response) -> Response:
+    """Refleja el origin de localhost para que el front Next (cualquier
+    puerto de dev) pueda hacer fetch al backend. Usa X-Project-Code, no
+    cookies, así que reflejar el origin es seguro aquí."""
+    origen = request.headers.get("Origin", "")
+    if origen and _ORIGEN_LOCAL.match(origen):
+        response.headers["Access-Control-Allow-Origin"] = origen
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Methods"] = (
+            "GET, POST, PUT, DELETE, OPTIONS"
+        )
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, X-Project-Code"
+        )
+        response.headers["Access-Control-Max-Age"] = "3600"
     return response
-
-
-@app.route("/api/<path:path>", methods=["OPTIONS"])
-def _cors_preflight(path):
-    origin = request.headers.get("Origin", "")
-    resp = app.make_response("")
-    resp.headers["Access-Control-Allow-Origin"] = origin
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Project-Code"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    return resp, 204
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -71,7 +89,7 @@ _RATE_LIMITS = {
     "/api/geografia/eje":   (60, 5),
     "/api/iching/consulta":    (60, 5),
     "/api/geomancia/lectura":  (60, 5),
-    "/api/servitors/crear":   (3600, 10), # 10 servitors por hora
+    "/api/servitors/crear":   (3600, 10),  # 10 servitors por hora
     "/api/servitors/invocar": (60, 8),
     "/api/discord/oraculo":   (60, 5),
     "/api/sync/nueva":        (3600, 20),
@@ -147,20 +165,28 @@ sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from grimorio_base import (
-    DEIDADES, TUTU_SYSTEM, ARBOLES_DEIDADES,
+    DEIDADES, ARBOLES_DEIDADES,
     INVOCACIONES_DIRECTAS, sembrar_memoria_artemisa,
     CHAKRAS, ARBOL_VIDA_SEPHIROTH, ARBOL_MUERTE_QLIPHOTH,
-    CHAKRAS_ARTEMISA_SOCIAL, RUEDA_COLORES, RUEDA_COMO_CONTEXTO,
+    CHAKRAS_ARTEMISA_SOCIAL, RUEDA_COLORES,
 )
-from base_datos import (
-    inicializar_db, guardar_decision, escribir_grimorio, leer_grimorio,
-    historial_decisiones, estadisticas,
-    guardar_sigilo, leer_sigilos, cargar_sigilo, quemar_sigilo,
-    guardar_carta_natal, leer_carta_natal,
-    ProyectoRepo, ConversacionRepo, EsferaRepo, ServitorRepo,
-    SyncRepo, ParadigmaRepo,
+from base_datos.schema   import inicializar_db
+from base_datos.proyecto import ProyectoRepo, ConversacionRepo
+from base_datos.esferas  import EsferaRepo
+from base_datos.practicas import ServitorRepo, SyncRepo, ParadigmaRepo
+from base_datos.usuario  import UsuarioRepo, ExpRepo, LogroRepo
+from base_datos.grimorio import GrimorioRepo, SigiloRepo
+from base_datos.legacy import (
+    DecisionRepo, GrimorioLegadoRepo, SigiloLegadoRepo,
+    CartaNatalRepo, estadisticas,
 )
-from luna import luna_hoy, luna_como_contexto
+from luna import luna_hoy
+from tarot import ARCANOS, POSICIONES, carta_por_n
+from astral import (
+    CIUDADES, calcular_carta_natal, KERYKEION_OK
+)
+
+# ── Módulos de features (Fase 1/2/3): divinación + magia del caos ───────────
 from runas import RUNAS, tirada as runas_tirada, posiciones_3, posiciones_9, SYSTEM_VOLVA
 from gnosis import METODOS_GNOSIS, recomendar_metodo, guia_texto, SYSTEM_VOID_WALKER
 from iching import consulta as iching_consulta, SYSTEM_YIJING, TRIGRAMAS
@@ -183,16 +209,49 @@ from paradigms import (
     enriquecer_paradigma, render_paradigma, calcular_progreso,
     PARADIGMAS, SYSTEM_PSICONAUTA, DURACION_DIAS as PARADIGM_DIAS,
 )
-from tarot import ARCANOS, POSICIONES, carta_por_n, tirada_como_contexto
-from astral import (
-    CIUDADES, calcular_carta_natal, carta_natal_como_contexto, KERYKEION_OK
+
+# Módulo de invocación IA (encapsula el proveedor tras una interface).
+from invocacion import invocador
+# Identidad de proyecto encapsulada (header, cifrado, proyecto-vs-legacy).
+from proyecto_contexto import ContextoProyecto
+
+from base_datos.biblioteca import EntradaRepo, FuenteRepo, ContribucionRepo, ResonanciaRepo
+from biblioteca import (
+    sembrar_canon, obtener_entrada_completa,
+    validar_nueva_entrada, validar_fuente,
+    validar_resonancia, validar_contribucion,
+    _hash as _bib_hash, _slugify,
 )
+
+
+def _ia(system, messages, **kw) -> str:
+    """Puente a la IA para endpoints de features: devuelve el texto crudo.
+
+    Reemplaza el antiguo `groq_client.chat(...)`. El adapter concreto está
+    detrás de `invocador` (intercambiable: Groq / offline / test)."""
+    return invocador.cliente_ia.chat(system, messages, **kw).texto
 
 # ── Inicializar ────────────────────────────────────────────────────────────
 inicializar_db()
 sembrado = sembrar_memoria_artemisa()
 if sembrado:
     print("  · Memoria de Artemisa sembrada")
+n_canon = sembrar_canon()
+if n_canon:
+    print(f"  · Biblioteca: {n_canon} entradas canónicas sembradas")
+
+
+def _sembrar_proyecto_demo() -> None:
+    """Crea el proyecto 'demo' si no existe (usado por el frontend de Fase 3)."""
+    demo = Proyecto(codigo="demo")
+    if not ProyectoRepo.existe(demo.hash):
+        metadatos = json.dumps({"nombre": "Demo Kalinabis", "creado_con": "seed"})
+        cifrado = Cifrador.cifrar(metadatos, "demo")
+        ProyectoRepo.crear(demo.hash, cifrado)
+        print("  · Proyecto 'demo' sembrado (Fase 3 frontend)")
+
+
+_sembrar_proyecto_demo()
 
 errores_config = Config.verificar()
 for err in errores_config:
@@ -200,80 +259,19 @@ for err in errores_config:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  CLIENTE GROQ
-# ═══════════════════════════════════════════════════════════════════════════
-
-class ClienteGroq:
-    def __init__(self):
-        self.api_key = Config.GROQ_API_KEY
-        self.model = Config.GROQ_MODEL
-        self._client = None
-
-    def _inicializar(self):
-        if self._client is None and self.api_key:
-            try:
-                from groq import Groq
-                self._client = Groq(api_key=self.api_key)
-            except ImportError:
-                raise ImportError(
-                    "Se necesita 'groq'. "
-                    "Ejecutá: pip install groq"
-                )
-
-    def chat(self, system: str, messages: list,
-             max_tokens: int | None = None,
-             temperature: float | None = None) -> str:
-        if not self.api_key:
-            return ("[Modo offline] No hay GROQ_API_KEY configurada. "
-                    "El servidor necesita una key de Groq para responder.")
-
-        self._inicializar()
-        max_tok = max_tokens or Config.GROQ_MAX_TOKENS
-        temp = temperature if temperature is not None else Config.GROQ_TEMPERATURE
-
-        msgs = [{"role": "system", "content": system}]
-        for m in messages:
-            role = "assistant" if m.get("role") == "assistant" else "user"
-            msgs.append({"role": role, "content": m.get("content", "")})
-
-        try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=msgs,
-                max_tokens=max_tok,
-                temperature=temp,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"[Error Groq: {e}]"
-
-
-groq_client = ClienteGroq()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 #  HELPER — PROYECTO DESDE HEADER
 # ═══════════════════════════════════════════════════════════════════════════
 
-PROYECTO_HEADER = "X-Project-Code"
+def _contexto() -> ContextoProyecto:
+    return ContextoProyecto.desde_headers(request.headers)
 
 
-def _obtener_proyecto() -> Optional[Proyecto]:
-    codigo = request.headers.get(PROYECTO_HEADER)
-    if not codigo:
-        return None
-    proyecto = Proyecto(codigo=codigo)
-    if not ProyectoRepo.existe(proyecto.hash):
-        return None
-    return proyecto
-
-
-def _proyecto_requerido(proyecto: Optional[Proyecto]):
-    if not proyecto:
-        return jsonify({
-            "error": f"Header {PROYECTO_HEADER} requerido o código inválido"
-        }), 401
-    ProyectoRepo.actualizar_actividad(proyecto.hash)
+def _proyecto_requerido(ctx: ContextoProyecto):
+    err = ctx.requerir()
+    if err:
+        datos, status = err
+        return jsonify(datos), status
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -326,22 +324,22 @@ def proyecto_nuevo():
 
 @app.route("/api/proyecto/verificar", methods=["POST"])
 def proyecto_verificar():
-    proyecto = _obtener_proyecto()
-    if not proyecto:
+    ctx = _contexto()
+    if not ctx.activo:
         return jsonify({"existe": False})
 
-    cifrado = ProyectoRepo.obtener_metadatos(proyecto.hash)
+    cifrado = ProyectoRepo.obtener_metadatos(ctx.hash)
     if not cifrado:
         return jsonify({"existe": False})
 
-    descifrado = Cifrador.descifrar(cifrado, proyecto.codigo)
+    descifrado = ctx.descifrar(cifrado)
     if not descifrado:
         return jsonify({"existe": False, "error": "código incorrecto"})
 
     metadatos = json.loads(descifrado)
     return jsonify({
         "existe": True,
-        "hash": proyecto.hash[:12],
+        "hash": ctx.hash[:12],
         "metadatos": metadatos,
     })
 
@@ -350,13 +348,18 @@ def proyecto_verificar():
 #  API — INVOCACIÓN
 # ═══════════════════════════════════════════════════════════════════════════
 
-@app.route("/api/consultar", methods=["POST"])
+@app.route("/api/consultar", methods=["POST", "OPTIONS"])
 @_limitar_request()
 def consultar():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    # Manejar OPTIONS para preflight CORS
+    if request.method == "OPTIONS":
+        return "", 204
+
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
+    proyecto = ctx.proyecto
 
     data = request.json
     if not isinstance(data, dict):
@@ -377,6 +380,10 @@ def consultar():
     if concepto and (e := _validar_string(concepto, "concepto", 200)):
         return jsonify({"error": e}), 400
 
+    # Procesar comandos (/, /manifestar, /ayuda, /generar)
+    if mensaje.startswith("/"):
+        return _procesar_comando(mensaje, proyecto)
+
     entidad = entidad_forzada
     modo = "directo"
 
@@ -391,6 +398,10 @@ def consultar():
     if not entidad:
         entidad, estado_r, razon = _tutu_decide(mensaje)
         modo = "tutu"
+        # Fallback a tutu si decidir_entidad devuelve algo inválido
+        if entidad not in DEIDADES and entidad != "tutu":
+            entidad = "tutu"
+            estado_r = "alma"
     else:
         razon = "invocación directa del practicante"
         estado_r = "cuerpo" if entidad != "tutu" else "alma"
@@ -402,7 +413,7 @@ def consultar():
         respuesta = _invocar_deidad(entidad, mensaje, proyecto)
         estado_r = "cuerpo"
 
-    guardar_decision(mensaje, entidad, estado_r, modo, razon)
+    DecisionRepo.guardar(mensaje, entidad, estado_r, modo, razon)
 
     esferas_activadas = GestorEsferas.marcar_por_invocacion(
         entidad=entidad,
@@ -411,79 +422,173 @@ def consultar():
         proyecto_hash=proyecto.hash,
     )
 
+    # Incluir presentación visual de la deidad
+    presentacion = formatear_presentacion(entidad, estado_r) if entidad != "tutu" else ""
+
     return jsonify({
         "entidad": entidad,
         "estado": estado_r,
         "modo": modo,
         "razon": razon,
         "respuesta": respuesta,
+        "presentacion": presentacion,
         "esferas_activadas": esferas_activadas,
         "eje_del_mundo": GestorGeografico.eje_del_mundo_para(ubicacion),
     })
 
 
 def _tutu_decide(mensaje: str):
-    system = """Lee el mensaje del practicante y decide qué entidad debe responder.
+    return invocador.decidir_entidad(mensaje)
 
-Entidades:
-- isis     → libertad, amor materno, pureza, vínculo herido
-- afrodita → claridad mental, calma, estados de conciencia, paz
-- lilith   → cambio urgente, tormenta, energía reprimida, pasión
-- artemisa → enraizarse, ancestros, naturaleza, colectivo, abundancia
-- tutu     → propósito, cuestionamiento interior, paradojas
 
-Responde SOLO con este JSON exacto, sin explicaciones ni markdown:
-{"deidad": "nombre", "estado": "cuerpo", "razon": "frase breve"}"""
+def _contexto_vivo(
+    nombre_deidad: str,
+    proyecto_hash: str | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Obtiene el estado del bosque y fragmentos de biblioteca para una deidad.
 
-    texto = groq_client.chat(system, [{"role": "user", "content": mensaje}],
-                             max_tokens=64)
+    Si proyecto_hash está presente, enriquece las esferas emergentes con las
+    ofrendas de las esferas que este mago visitó recientemente.
+    """
+    from invocacion.contexto import ContextoManager
+    try:
+        esferas = GestorEsferas.listar_activas(amplitud_min=1.0)
+        emergentes = sorted(esferas, key=lambda x: -x.get("amplitud_actual", 0))[:5]
+    except Exception:
+        emergentes = []
+
+    # Enriquecer con ofrendas de las esferas visitadas por este mago
+    if proyecto_hash and emergentes:
+        try:
+            visitadas = OfrendaRepo.esferas_visitadas_por_proyecto(
+                proyecto_hash, limite=3
+            )
+            visitadas_idx = {
+                (v["tipo_esfera"], v["clave_esfera"]) for v in visitadas
+            }
+            for e in emergentes:
+                if (e["tipo"], e["clave_unica"]) in visitadas_idx:
+                    ofrendas = OfrendaRepo.listar(e["tipo"], e["clave_unica"], limite=3)
+                    e["ofrendas_recientes"] = ofrendas
+                    e["visitada_por_mago"] = True
+        except Exception:
+            pass
 
     try:
-        inicio = texto.find("{")
-        fin = texto.rfind("}") + 1
-        if inicio >= 0 and fin > inicio:
-            d = json.loads(texto[inicio:fin])
-            return d.get("deidad", "tutu"), d.get("estado", "cuerpo"), \
-                   d.get("razon", "")
+        from base_datos.biblioteca import EntradaRepo as _BibRepo
+        dominios = ContextoManager.dominios_deidad(nombre_deidad)
+        entradas = []
+        for dom in dominios[:2]:
+            entradas += _BibRepo.listar(dominio=dom, limite=2)
+        entradas = sorted(entradas, key=lambda x: -x.get("resonancia", 0))[:2]
     except Exception:
-        pass
-    return "tutu", "alma", "decisión interna"
+        entradas = []
+    return emergentes, entradas
 
 
 def _invocar_deidad(nombre: str, mensaje: str, proyecto: Proyecto) -> str:
     if nombre not in DEIDADES:
         return f"Entidad desconocida: {nombre}"
-
-    memoria = ConversacionRepo.cargar(proyecto.hash, nombre)
-    ConversacionRepo.guardar(proyecto.hash, nombre, "user", mensaje)
-    memoria.append({"role": "user", "content": mensaje})
-
-    system = (DEIDADES[nombre]["system_prompt"]
-              + luna_como_contexto() + RUEDA_COMO_CONTEXTO)
-
-    try:
-        carta_cifrada = ProyectoRepo.obtener_carta_natal(proyecto.hash)
-        if carta_cifrada:
-            datos_carta = Cifrador.descifrar(carta_cifrada, proyecto.codigo)
-            if datos_carta:
-                system += carta_natal_como_contexto(json.loads(datos_carta))
-    except Exception:
-        pass
-
-    texto = groq_client.chat(system=system, messages=memoria, max_tokens=1024)
-    ConversacionRepo.guardar(proyecto.hash, nombre, "assistant", texto)
-    return texto
+    esferas, entradas = _contexto_vivo(nombre, proyecto_hash=proyecto.hash)
+    return invocador.invocar_deidad(
+        nombre, mensaje, proyecto,
+        esferas_bosque=esferas or None,
+        entradas_biblioteca=entradas or None,
+    ).texto
 
 
 def _invocar_tutu(mensaje: str, proyecto: Proyecto) -> str:
-    memoria = ConversacionRepo.cargar(proyecto.hash, "tutu")
-    ConversacionRepo.guardar(proyecto.hash, "tutu", "user", mensaje)
-    memoria.append({"role": "user", "content": mensaje})
+    esferas, _ = _contexto_vivo("tutu", proyecto_hash=proyecto.hash)
+    return invocador.invocar_tutu(mensaje, proyecto,
+                                   esferas_bosque=esferas or None).texto
 
-    system = TUTU_SYSTEM + luna_como_contexto() + RUEDA_COMO_CONTEXTO
-    texto = groq_client.chat(system=system, messages=memoria, max_tokens=1024)
-    ConversacionRepo.guardar(proyecto.hash, "tutu", "assistant", texto)
-    return texto
+
+def _procesar_comando(mensaje: str, proyecto: Proyecto) -> tuple[dict, int]:
+    """Procesa comandos que comienzan con /."""
+    partes = mensaje.split(maxsplit=1)
+    cmd = partes[0].lower()
+    args = partes[1] if len(partes) > 1 else ""
+
+    # /ayuda — muestra comandos disponibles
+    if cmd == "/ayuda" or cmd == "/help":
+        respuesta = (
+            "Comandos disponibles:\n"
+            "/manifestar <diosa> — Manifiesta una diosa en el altar\n"
+            "  Ej: /manifestar lilith, /manifestar isis\n"
+            "/generar <diosa> — Regenera el sprite de una diosa\n"
+            "  Ej: /generar lilith\n"
+            "/ayuda — Muestra esta lista\n"
+            "\nDiosas disponibles: lilith, isis, afrodita, artemisa\n"
+            "O habla con Tutu normalmente — él decide qué diosa manifestar."
+        )
+        return jsonify({
+            "entidad": "tutu",
+            "respuesta": respuesta,
+            "estado": "alma",
+            "modo": "comando",
+            "razon": "comando /ayuda"
+        }), 200
+
+    # /manifestar <diosa> — manifiesta una diosa específica
+    elif cmd == "/manifestar":
+        if not args:
+            return jsonify({
+                "error": "Uso: /manifestar <diosa>",
+                "ejemplo": "/manifestar lilith"
+            }), 400
+
+        diosa = args.lower().strip()
+        if diosa not in DEIDADES:
+            return jsonify({
+                "error": f"Diosa desconocida: {diosa}",
+                "disponibles": list(DEIDADES.keys())
+            }), 400
+
+        # Obtener saludo inicial de la diosa
+        saludo = DEIDADES[diosa].get("saludo", "Bienvenido a mi altar.")
+        return jsonify({
+            "entidad": diosa,
+            "respuesta": saludo,
+            "estado": "cuerpo",
+            "modo": "manifestacion",
+            "razon": f"comando /manifestar {diosa}"
+        }), 200
+
+    # /generar <diosa> — Regenera sprite (requeriría script local)
+    elif cmd == "/generar":
+        if not args:
+            return jsonify({
+                "error": "Uso: /generar <diosa>",
+                "ejemplo": "/generar lilith"
+            }), 400
+
+        diosa = args.lower().strip()
+        if diosa not in DEIDADES:
+            return jsonify({
+                "error": f"Diosa desconocida: {diosa}",
+                "disponibles": list(DEIDADES.keys())
+            }), 400
+
+        # Llamar al script local (esto se ejecutaría en background idealmente)
+        respuesta = (
+            f"Regenerando sprite de {diosa.upper()}...\n"
+            f"Usa: python tools/gen_sprite_detailed.py --diosa {diosa}\n"
+            f"O con HF API: python tools/gen_sprite_hf.py --diosa {diosa}"
+        )
+        return jsonify({
+            "entidad": "tutu",
+            "respuesta": respuesta,
+            "estado": "alma",
+            "modo": "comando",
+            "razon": f"comando /generar {diosa}"
+        }), 200
+
+    # Comando desconocido
+    else:
+        return jsonify({
+            "error": f"Comando desconocido: {cmd}",
+            "hint": "Escribe /ayuda para ver los comandos disponibles"
+        }), 400
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -502,7 +607,7 @@ def get_esferas():
 
 @app.route("/api/esferas", methods=["POST"])
 def post_esferas():
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     d = request.json
     tipo = d.get("tipo", "").strip()
     clave = d.get("clave", "").strip()
@@ -516,7 +621,7 @@ def post_esferas():
             tipo=tipo,
             clave_unica=clave,
             metadata=metadata,
-            proyecto_hash=proyecto.hash if proyecto else None,
+            proyecto_hash=ctx.hash,
         )
         return jsonify({"ok": True, "esfera": resultado})
     except ValueError as e:
@@ -531,6 +636,278 @@ def post_esferas():
 def get_bosque_mapa():
     mapa = GestorEsferas.obtener_mapa()
     return jsonify(mapa)
+
+
+@app.route("/api/bosque/voz", methods=["GET"])
+def get_bosque_voz():
+    """La voz del bosque — lectura IA del estado colectivo actual.
+
+    No es una deidad. No responde preguntas. Es el bosque observándose a sí mismo.
+    Puede recibir ?modo=breve|profundo para ajustar la extensión.
+    """
+    # Reunir el estado completo del bosque
+    try:
+        esferas = GestorEsferas.listar_activas(amplitud_min=0.1)
+    except Exception:
+        esferas = []
+
+    try:
+        eventos = EventoRepo.listar(limite=20)
+        for ev in eventos:
+            ev["narrativa"] = _narrativa_evento(ev)
+    except Exception:
+        eventos = []
+
+    try:
+        humus = HumusRepo.listar(limite=15)
+    except Exception:
+        humus = []
+
+    try:
+        relaciones = RelacionRepo.listar_todas(fuerza_min=0.5)
+    except Exception:
+        relaciones = []
+
+    try:
+        ConvergenciaRepo.expirar_antiguas()
+        convergencias = ConvergenciaRepo.listar_activas(limite=10)
+    except Exception:
+        convergencias = []
+
+    if not esferas and not eventos and not humus:
+        return jsonify({
+            "voz": "El bosque está en silencio. Todavía no hay energía colectiva suficiente para leer.",
+            "estado": {"esferas": 0, "eventos": 0, "humus": 0},
+        })
+
+    try:
+        respuesta = invocador.voz_bosque(
+            esferas=esferas,
+            eventos=eventos,
+            humus=humus,
+            relaciones=relaciones,
+            convergencias=convergencias,
+        )
+        voz = respuesta.texto
+    except Exception as exc:
+        return jsonify({"error": f"No se pudo invocar la voz del bosque: {exc}"}), 500
+
+    return jsonify({
+        "voz": voz,
+        "estado": {
+            "esferas_vivas": len(esferas),
+            "eventos_recientes": len(eventos),
+            "humus": len(humus),
+            "relaciones_activas": len(relaciones),
+            "emergentes": [
+                {"tipo": e["tipo"], "clave": e["clave_unica"], "amplitud": e.get("amplitud_actual", 0)}
+                for e in esferas if e.get("amplitud_actual", 0) >= 3.5
+            ],
+        },
+    })
+
+
+@app.route("/api/bosque/convergencias", methods=["GET"])
+def get_bosque_convergencias():
+    """Señales colectivas activas: pares de esferas que N proyectos independientes
+    marcaron juntos dentro de la ventana de 24h sin coordinarse entre sí."""
+    ConvergenciaRepo.expirar_antiguas()
+    convergencias = ConvergenciaRepo.listar_activas(limite=30)
+
+    enriquecidas = []
+    for c in convergencias:
+        # Leer amplitudes actuales de ambas esferas para dar contexto
+        ea = EsferaRepo.obtener(c["tipo_a"], c["clave_a"])
+        eb = EsferaRepo.obtener(c["tipo_b"], c["clave_b"])
+        enriquecidas.append({
+            **c,
+            "esfera_a": {
+                "amplitud": ea["amplitud"] if ea else None,
+                "fase": ea["fase_decaimiento"] if ea else "disuelta",
+            },
+            "esfera_b": {
+                "amplitud": eb["amplitud"] if eb else None,
+                "fase": eb["fase_decaimiento"] if eb else "disuelta",
+            },
+            "narrativa": _narrativa_convergencia(c),
+        })
+
+    return jsonify({
+        "convergencias": enriquecidas,
+        "total": len(enriquecidas),
+        "umbral": UMBRAL_CONVERGENCIA,
+        "ventana_horas": VENTANA_CONVERGENCIA_H,
+    })
+
+
+def _narrativa_convergencia(c: dict) -> str:
+    n = c["n_proyectos"]
+    a = f"{c['tipo_a']}:{c['clave_a']}"
+    b = f"{c['tipo_b']}:{c['clave_b']}"
+    magos = "magos" if n != 1 else "mago"
+    return (
+        f"{n} {magos} independientes marcaron {a} y {b} "
+        f"dentro de las mismas {VENTANA_CONVERGENCIA_H}h — "
+        f"señal colectiva sin coordinación explícita."
+    )
+
+
+@app.route("/api/bosque/eventos", methods=["GET"])
+def get_bosque_eventos():
+    """Crónica del bosque — registro histórico de eventos significativos."""
+    tipo_evento = request.args.get("tipo_evento")
+    tipo_esfera = request.args.get("tipo_esfera")
+    clave_esfera = request.args.get("clave_esfera")
+    limite = min(int(request.args.get("limite", 30)), 100)
+    offset = int(request.args.get("offset", 0))
+    cronica = request.args.get("cronica", "false").lower() == "true"
+
+    if cronica:
+        eventos = EventoRepo.cronica(limite=limite)
+    else:
+        eventos = EventoRepo.listar(
+            tipo_evento=tipo_evento,
+            tipo_esfera=tipo_esfera,
+            clave_esfera=clave_esfera,
+            limite=limite,
+            offset=offset,
+        )
+        for ev in eventos:
+            ev["narrativa"] = _narrativa_evento(ev)
+
+    return jsonify({
+        "eventos": eventos,
+        "total": len(eventos),
+    })
+
+
+@app.route("/api/bosque/esferas/<tipo>/<clave>/interior", methods=["GET"])
+def get_esfera_interior(tipo: str, clave: str):
+    """El interior de una esfera como espacio colectivo:
+    datos de la esfera + ofrendas de todos los magos + relaciones + últimos eventos."""
+    tipo = tipo.lower().strip()
+    clave = clave.lower().strip()
+
+    esfera = EsferaRepo.obtener(tipo, clave)
+    if not esfera:
+        return jsonify({"error": "Esfera no encontrada"}), 404
+
+    from esferas import Esfera as _EsferaModel
+    esfera_viva = _EsferaModel(
+        tipo=esfera["tipo"], clave_unica=esfera["clave_unica"],
+        metadata=esfera.get("metadata", {}),
+        amplitud=esfera["amplitud"],
+        fase_decaimiento=esfera["fase_decaimiento"],
+        created_at=esfera.get("created_at", ""),
+        updated_at=esfera.get("updated_at", ""),
+    ).a_dict()
+
+    ofrendas = OfrendaRepo.listar(tipo, clave, limite=30)
+    relaciones = RelacionRepo.listar_de(tipo, clave)
+    eventos = EventoRepo.listar(tipo_esfera=tipo, clave_esfera=clave, limite=10)
+    for ev in eventos:
+        ev["narrativa"] = _narrativa_evento(ev)
+
+    # ¿Esta esfera nació sobre humus de una vida anterior?
+    humus_anterior = HumusRepo.obtener(tipo, clave)
+
+    return jsonify({
+        "esfera": esfera_viva,
+        "ofrendas": ofrendas,
+        "ofrendas_total": OfrendaRepo.conteo(tipo, clave),
+        "relaciones": relaciones,
+        "eventos": eventos,
+        "humus_anterior": humus_anterior,
+    })
+
+
+@app.route("/api/bosque/esferas/<tipo>/<clave>/entrar", methods=["POST"])
+def post_esfera_entrar(tipo: str, clave: str):
+    """Un mago entra a una esfera. Puede dejar una ofrenda.
+    Entrar amplifica la esfera y opcionalmente carga su contexto en el altar."""
+    ctx = _contexto()
+    tipo = tipo.lower().strip()
+    clave = clave.lower().strip()
+
+    if tipo not in GestorEsferas.TIPOS_VALIDOS:
+        return jsonify({"error": f"Tipo inválido: {tipo}"}), 400
+
+    data = request.get_json(silent=True) or {}
+    texto_ofrenda = (data.get("ofrenda") or "").strip()
+    entidad_activa = (data.get("entidad") or "").strip() or None
+
+    # Amplificar la esfera al entrar (presencia = energía)
+    proyecto_hash = ctx.hash if ctx.activo else None
+    try:
+        esfera_actualizada = GestorEsferas.marcar(
+            tipo, clave,
+            metadata={"visitada_por": entidad_activa} if entidad_activa else None,
+            proyecto_hash=proyecto_hash,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Registrar ofrenda si la hay
+    ofrenda_guardada = None
+    if texto_ofrenda and len(texto_ofrenda) <= 1000:
+        ofrenda_guardada = OfrendaRepo.dejar(
+            tipo, clave,
+            texto=texto_ofrenda,
+            proyecto_hash=proyecto_hash,
+            entidad=entidad_activa,
+        )
+
+    # Contexto de la esfera para llevar al altar
+    ofrendas_recientes = OfrendaRepo.listar(tipo, clave, limite=5)
+    contexto_esfera = _contexto_esfera_para_altar(
+        esfera_actualizada, ofrendas_recientes
+    )
+
+    return jsonify({
+        "esfera": esfera_actualizada,
+        "ofrenda": ofrenda_guardada,
+        "contexto_altar": contexto_esfera,
+        "ofrendas_recientes": ofrendas_recientes,
+    })
+
+
+def _contexto_esfera_para_altar(esfera: dict, ofrendas: list[dict]) -> str:
+    """Genera el bloque de contexto que se inyecta en el altar
+    cuando un mago viene de una esfera del bosque."""
+    tipo = esfera["tipo"]
+    clave = esfera["clave_unica"]
+    amp = esfera.get("amplitud_actual", esfera.get("amplitud", 0))
+    bloque = (
+        f"\n\n═══ VIENES DEL BOSQUE ═══\n"
+        f"El mago acaba de salir de la esfera colectiva {tipo}:{clave} "
+        f"(amplitud {amp:.2f}).\n"
+    )
+    if ofrendas:
+        bloque += "Lo que otros magos dejaron allí:\n"
+        for o in ofrendas[:3]:
+            ent = o.get("entidad") or "un mago anónimo"
+            bloque += f'  · [{ent}]: "{o["texto"]}"\n'
+    bloque += "═════════════════════════\n"
+    return bloque
+
+
+@app.route("/api/bosque/relaciones", methods=["GET"])
+def get_bosque_relaciones():
+    """Grafo de relaciones tipadas entre esferas de distintos tipos."""
+    tipo = request.args.get("tipo")
+    clave = request.args.get("clave")
+    fuerza_min = float(request.args.get("fuerza_min", 0.5))
+
+    if tipo and clave:
+        relaciones = RelacionRepo.listar_de(tipo.lower(), clave.lower())
+    else:
+        relaciones = RelacionRepo.listar_todas(fuerza_min=fuerza_min)
+
+    return jsonify({
+        "relaciones": relaciones,
+        "total": len(relaciones),
+        "tipos_disponibles": sorted(TIPOS_RELACION),
+    })
 
 
 @app.route("/api/bosque/salud", methods=["GET"])
@@ -577,15 +954,16 @@ def post_bosque_ciclo():
 
 @app.route("/api/bosque/estratos", methods=["GET"])
 def get_bosque_estratos():
-    """
-    Clasifica las esferas activas en los 3 estratos de memoria del Bosque:
-      Sotobosque (Nag Mapu)  — amplitud < 2.0  — todo lo que germina
-      Dosel                  — 2.0 ≤ amp < 3.5  — lo que encontró luz
-      Emergentes (Wenu Mapu) — amplitud ≥ 3.5   — el canon vivo del bosque
+    """Los 4 estratos narrativos del bosque.
+
+    Estrato 1 — emergentes  (amplitud >= 3.5): árboles que tocan el cielo
+    Estrato 2 — dosel       (amplitud 2.0-3.5): maduros, plenos
+    Estrato 3 — sotobosque  (amplitud < 2.0, vivas): jóvenes o en letargo
+    Estrato 4 — humus       (disueltas): suelo fértil, con su causa de muerte
     """
     esferas = GestorEsferas.listar_activas()
 
-    sotobosque, dosel, emergentes = [], [], []
+    emergentes, dosel, sotobosque = [], [], []
     for e in esferas:
         a = e["amplitud_actual"]
         if a >= 3.5:
@@ -595,48 +973,74 @@ def get_bosque_estratos():
         else:
             sotobosque.append(e)
 
-    # Atmosfera: qué elemento domina en las esferas elementales
+    # Estrato humus: esferas muertas con su historia
+    humus_raw = HumusRepo.listar(limite=30)
+    humus = []
+    for h in humus_raw:
+        narrativa = _narrativa_humus(h)
+        humus.append({**h, "narrativa": narrativa})
+
+    # Atmósfera elemental
     elementales = [e for e in esferas if e["tipo"] == "elemental"]
     atm_por_elem: dict[str, float] = {}
     for e in elementales:
-        clave = e["clave_unica"]
-        atm_por_elem[clave] = atm_por_elem.get(clave, 0) + e["amplitud_actual"]
+        c = e["clave_unica"]
+        atm_por_elem[c] = atm_por_elem.get(c, 0) + e["amplitud_actual"]
 
     ELEM_DEIDAD = {"fuego": "isis", "agua": "lilith", "aire": "afrodita", "tierra": "artemisa"}
-    ELEM_ICONO  = {"fuego": "🔥", "agua": "💧", "aire": "💨", "tierra": "🌿"}
     elemento_dominante = max(atm_por_elem, key=atm_por_elem.get) if atm_por_elem else None
     atmosfera = {
-        "elemento":  elemento_dominante,
-        "deidad":    ELEM_DEIDAD.get(elemento_dominante, "") if elemento_dominante else "",
-        "icono":     ELEM_ICONO.get(elemento_dominante, "") if elemento_dominante else "",
+        "elemento": elemento_dominante,
+        "deidad": ELEM_DEIDAD.get(elemento_dominante, "") if elemento_dominante else "",
         "equilibrio": len(atm_por_elem) >= 3,
-    } if atm_por_elem else {"elemento": None, "deidad": "", "icono": "", "equilibrio": False}
+    } if atm_por_elem else {"elemento": None, "deidad": "", "equilibrio": False}
 
     luna = luna_hoy()
     luna_ctx = f"{luna.get('fase', {}).get('emoji', '')} {luna.get('fase', {}).get('nombre', '')}"
 
     return jsonify({
         "estratos": {
-            "emergentes": sorted(emergentes, key=lambda x: -x["amplitud_actual"])[:10],
-            "dosel":      sorted(dosel,      key=lambda x: -x["amplitud_actual"])[:15],
-            "sotobosque": sorted(sotobosque, key=lambda x: -x["amplitud_actual"])[:20],
+            "emergentes":  sorted(emergentes, key=lambda x: -x["amplitud_actual"])[:10],
+            "dosel":       sorted(dosel,      key=lambda x: -x["amplitud_actual"])[:15],
+            "sotobosque":  sorted(sotobosque, key=lambda x: -x["amplitud_actual"])[:20],
+            "humus":       humus,
         },
         "conteos": {
-            "emergentes": len(emergentes),
-            "dosel":      len(dosel),
-            "sotobosque": len(sotobosque),
+            "emergentes":  len(emergentes),
+            "dosel":       len(dosel),
+            "sotobosque":  len(sotobosque),
+            "humus":       len(humus),
         },
         "atmosfera": atmosfera,
         "luna":      luna_ctx,
     })
 
 
+def _narrativa_humus(h: dict) -> str:
+    tipo = h["tipo"]
+    clave = h["clave_unica"]
+    causa = h.get("causa", "desconocida")
+    dias = h.get("dias_activa", 0)
+    ofrendas = h.get("ofrendas_count", 0)
+    absorbida_por = h.get("absorbida_por")
+
+    base = f"{tipo}:{clave} vivió {dias:.0f} días"
+    if ofrendas:
+        base += f", recibió {ofrendas} {'ofrenda' if ofrendas == 1 else 'ofrendas'}"
+
+    if causa == "absorbida" and absorbida_por:
+        return f"{base} — fue absorbida por {absorbida_por}. Su energía vive allí."
+    if causa == "decaimiento_natural":
+        return f"{base} — se disolvió en silencio. Nadie vino al final."
+    return f"{base} — su humus queda en el suelo."
+
+
 @app.route("/api/bosque/marcar", methods=["POST"])
 @_limitar_request()
 def post_bosque_marcar():
     """Marcar una esfera bajo el Canelo — acto de resonancia deliberado."""
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -651,7 +1055,7 @@ def post_bosque_marcar():
         return jsonify({"error": "clave requerida"}), 400
 
     try:
-        esfera = GestorEsferas.marcar(tipo, clave, {}, proyecto.hash)
+        esfera = GestorEsferas.marcar(tipo, clave, {}, ctx.hash)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -687,7 +1091,7 @@ def get_eje_del_mundo():
 @app.route("/api/astral/calcular", methods=["POST"])
 @_limitar_request()
 def post_calcular_natal():
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
 
     if not KERYKEION_OK:
         return jsonify({"error": "kerykeion no instalado"}), 500
@@ -717,16 +1121,14 @@ def post_calcular_natal():
     if "error" in carta:
         return jsonify(carta), 400
 
-    if proyecto:
-        cifrado = Cifrador.cifrar(
-            json.dumps(carta), proyecto.codigo
-        )
+    if ctx.activo:
+        cifrado = ctx.cifrar(json.dumps(carta))
         ProyectoRepo.guardar_carta_natal(
-            proyecto.hash, cifrado,
+            ctx.hash, cifrado,
             nombre=d.get("nombre", "Consultante")
         )
     else:
-        guardar_carta_natal(
+        CartaNatalRepo.guardar(
             d.get("nombre", "Consultante"),
             int(d.get("anio")), int(d.get("mes")), int(d.get("dia")),
             int(d.get("hora")), int(d.get("minuto")),
@@ -739,13 +1141,13 @@ def post_calcular_natal():
 
 @app.route("/api/astral/guardada", methods=["GET"])
 def get_natal_guardada():
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
 
-    if proyecto:
-        cifrado = ProyectoRepo.obtener_carta_natal(proyecto.hash)
+    if ctx.activo:
+        cifrado = ProyectoRepo.obtener_carta_natal(ctx.hash)
         if not cifrado:
             return jsonify({"existe": False})
-        datos_str = Cifrador.descifrar(cifrado, proyecto.codigo)
+        datos_str = ctx.descifrar(cifrado)
         if not datos_str:
             return jsonify({"existe": False})
         datos = json.loads(datos_str)
@@ -755,7 +1157,7 @@ def get_natal_guardada():
             "cifrado": True,
         })
     else:
-        carta = leer_carta_natal()
+        carta = CartaNatalRepo.leer()
         if not carta:
             return jsonify({"existe": False})
         datos = {}
@@ -788,7 +1190,7 @@ def get_arcanos():
 @app.route("/api/tarot/leer/<entidad>", methods=["POST"])
 @_limitar_request()
 def tarot_leer(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
     d = request.json
     if not isinstance(d, dict):
@@ -797,57 +1199,11 @@ def tarot_leer(entidad):
     if not isinstance(cartas, list) or len(cartas) > 10:
         return jsonify({"error": "cartas debe ser lista de máx 10"}), 400
 
-    if entidad == "tutu":
-        system = TUTU_SYSTEM
-    elif entidad in DEIDADES:
-        system = DEIDADES[entidad]["system_prompt"]
-    else:
+    if entidad != "tutu" and entidad not in DEIDADES:
         return jsonify({"error": "entidad desconocida"}), 400
 
-    contexto = tirada_como_contexto(cartas)
-    system += luna_como_contexto()
-
-    if proyecto:
-        try:
-            carta_cifrada = ProyectoRepo.obtener_carta_natal(proyecto.hash)
-            if carta_cifrada:
-                datos_str = Cifrador.descifrar(carta_cifrada, proyecto.codigo)
-                if datos_str:
-                    system += carta_natal_como_contexto(json.loads(datos_str))
-        except Exception:
-            pass
-    else:
-        carta = leer_carta_natal()
-        if carta and carta.get("datos"):
-            try:
-                datos = json.loads(carta["datos"])
-                system += carta_natal_como_contexto(datos)
-            except Exception:
-                pass
-
-    system += (
-        "\n\nEl consultante ha extendido una tirada de tres cartas ante ti. "
-        "Lee la tirada completa desde tu naturaleza — une el pasado, el presente "
-        "y el futuro en una sola voz. Considera la luna de hoy y, si la conoces, "
-        "su carta natal. Habla con profundidad pero sin exceder un párrafo o dos."
-    )
-
-    prompt = f"{contexto}\n\nLee mi tirada."
-    respuesta = groq_client.chat(system=system,
-                                 messages=[{"role": "user", "content": prompt}],
-                                 max_tokens=700)
-
-    if proyecto:
-        ConversacionRepo.guardar(proyecto.hash, entidad, "user",
-                                 "[Tirada de tarot]")
-        ConversacionRepo.guardar(proyecto.hash, entidad, "assistant",
-                                 respuesta)
-    else:
-        from base_datos import guardar_mensaje
-        guardar_mensaje(entidad, "user", "[Tirada de tarot]")
-        guardar_mensaje(entidad, "assistant", respuesta)
-
-    return jsonify({"respuesta": respuesta, "entidad": entidad})
+    respuesta = invocador.leer_tarot(entidad, cartas, ctx.proyecto)
+    return jsonify({"respuesta": respuesta.texto, "entidad": entidad})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -856,7 +1212,7 @@ def tarot_leer(entidad):
 
 @app.route("/api/grimorio", methods=["GET"])
 def get_grimorio():
-    return jsonify(leer_grimorio(limite=30))
+    return jsonify(GrimorioLegadoRepo.leer(limite=30))
 
 
 @app.route("/api/grimorio", methods=["POST"])
@@ -870,7 +1226,7 @@ def post_grimorio():
         return jsonify({"error": e}), 400
     if e := _validar_string(contenido, "contenido", _MAX_CONTENIDO_LEN):
         return jsonify({"error": e}), 400
-    escribir_grimorio(
+    GrimorioLegadoRepo.escribir(
         titulo=titulo,
         contenido=contenido,
         entidad=d.get("entidad"),
@@ -881,7 +1237,7 @@ def post_grimorio():
 
 @app.route("/api/decisiones", methods=["GET"])
 def get_decisiones():
-    return jsonify(historial_decisiones(limite=15))
+    return jsonify(DecisionRepo.historial(limite=15))
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -891,37 +1247,25 @@ def get_stats():
 
 @app.route("/api/memoria/<entidad>", methods=["GET"])
 def get_memoria(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
-
-    if proyecto:
-        memoria = ConversacionRepo.cargar(proyecto.hash, entidad)
-        return jsonify(memoria[-12:])
-
-    from base_datos import cargar_memoria as cargar_memoria_legacy
-    memoria = cargar_memoria_legacy(entidad)
+    memoria = ctx.cargar_memoria(entidad)
     return jsonify(memoria[-12:])
 
 
 @app.route("/api/cerrar/<entidad>", methods=["POST"])
 def cerrar_ritual(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
-
-    if proyecto:
-        n = ConversacionRepo.limpiar(proyecto.hash, entidad)
-        return jsonify({"ok": True, "intercambios": n})
-
-    from base_datos import limpiar_memoria as limpiar_memoria_legacy
-    n = limpiar_memoria_legacy(entidad)
+    n = ctx.limpiar_memoria(entidad)
     return jsonify({"ok": True, "intercambios": n})
 
 
 @app.route("/api/mensajes/quemar", methods=["POST"])
 @_limitar_request()
 def quemar_mensaje():
-    proyecto = _obtener_proyecto()
-    if not proyecto:
+    ctx = _contexto()
+    if not ctx.activo:
         return jsonify({"error": "proyecto requerido"}), 401
     data = request.json
     if not isinstance(data, dict):
@@ -929,7 +1273,7 @@ def quemar_mensaje():
     msg_id = data.get("id")
     if not isinstance(msg_id, int):
         return jsonify({"error": "id debe ser entero"}), 400
-    ok = ConversacionRepo.eliminar_mensaje(proyecto.hash, msg_id)
+    ok = ConversacionRepo.eliminar_mensaje(ctx.hash, msg_id)
     return jsonify({"ok": ok})
 
 
@@ -940,7 +1284,7 @@ def get_luna():
 
 @app.route("/api/sigilos", methods=["GET"])
 def get_sigilos():
-    return jsonify(leer_sigilos(limite=50))
+    return jsonify(SigiloLegadoRepo.listar(limite=50))
 
 
 @app.route("/api/sigilo", methods=["POST"])
@@ -955,7 +1299,7 @@ def post_sigilo():
         return jsonify({"error": e}), 400
     if e := _validar_string(imagen, "imagen", _MAX_CONTENIDO_LEN):
         return jsonify({"error": e}), 400
-    sid = guardar_sigilo(
+    sid = SigiloLegadoRepo.guardar(
         intencion=intencion,
         imagen=imagen,
         entidad=d.get("entidad"),
@@ -967,64 +1311,27 @@ def post_sigilo():
 @app.route("/api/sigilo/cargar/<int:sid>", methods=["POST"])
 @_limitar_request()
 def post_cargar_sigilo(sid):
-    cargar_sigilo(sid)
+    SigiloLegadoRepo.cargar(sid)
     return jsonify({"ok": True})
 
 
 @app.route("/api/sigilo/quemar/<int:sid>", methods=["POST"])
 @_limitar_request()
 def post_quemar_sigilo(sid):
-    quemar_sigilo(sid)
+    SigiloLegadoRepo.quemar(sid)
     return jsonify({"ok": True})
 
 
 @app.route("/api/sigilo/regalo/<entidad>", methods=["POST"])
 def post_regalo_sigilo(entidad):
-    proyecto = _obtener_proyecto()
+    ctx = _contexto()
     entidad = entidad.lower()
 
-    if proyecto:
-        memoria = ConversacionRepo.cargar(proyecto.hash, entidad)
-    else:
-        from base_datos import cargar_memoria as cargar_memoria_legacy
-        memoria = cargar_memoria_legacy(entidad)
-
-    contexto = ""
-    if memoria:
-        ultimos = memoria[-6:]
-        contexto = "\n".join(
-            f"{'Practicante' if m['role']=='user' else entidad.capitalize()}: "
-            f"{m['content'][:200]}"
-            for m in ultimos
-        )
-
-    if entidad == "tutu":
-        system = TUTU_SYSTEM
-    elif entidad in DEIDADES:
-        system = DEIDADES[entidad]["system_prompt"]
-    else:
+    if entidad != "tutu" and entidad not in DEIDADES:
         return jsonify({"error": "entidad desconocida"}), 400
 
-    system += luna_como_contexto()
-    system += (
-        "\n\nEl practicante te pide un sigilo. Basándote en lo que han hablado, "
-        "regálale una intención breve y poderosa (máximo 8 palabras) que capture "
-        "lo que su alma necesita ahora. Responde SOLO con la intención en mayúsculas, "
-        "sin comillas ni explicación. Ejemplo: VEO CON CLARIDAD MI CAMINO"
-    )
-
-    prompt = (f"Conversación reciente:\n{contexto}\n\nDame la intención del sigilo."
-              if contexto else
-              "Dame una intención de sigilo para quien apenas llega.")
-
-    intencion = groq_client.chat(
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=40,
-    )
-    intencion = intencion.strip().strip('"').strip("'").upper()
-    intencion = intencion.split("\n")[0][:60]
-
+    memoria = ctx.cargar_memoria(entidad)
+    intencion = invocador.generar_intencion_sigilo(entidad, memoria)
     return jsonify({"intencion": intencion, "entidad": entidad})
 
 
@@ -1100,28 +1407,14 @@ def handle_exception(e):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  VERIFICAR GROQ
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _verificar_groq():
-    if not Config.GROQ_API_KEY:
-        return False, "GROQ_API_KEY no configurada"
-    try:
-        groq_client._inicializar()
-        return True, f"API key configurada · modelo: {Config.GROQ_MODEL}"
-    except Exception as e:
-        return False, str(e)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 #  API — RUNAS (Elder Futhark)
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/runas/tirada", methods=["POST"])
 @_limitar_request()
 def api_runas_tirada():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1168,7 +1461,7 @@ def api_runas_tirada():
         )
     }]
 
-    narrativa = groq_client.chat(system, messages, max_tokens=500, temperature=0.85)
+    narrativa = _ia(system, messages, max_tokens=500, temperature=0.85)
 
     return jsonify({
         "runas": runas,
@@ -1197,8 +1490,8 @@ def api_gnosis_metodos():
 @app.route("/api/gnosis/recomendar", methods=["POST"])
 @_limitar_request()
 def api_gnosis_recomendar():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1221,7 +1514,7 @@ def api_gnosis_recomendar():
         )
     }]
 
-    explicacion = groq_client.chat(system, messages, max_tokens=300, temperature=0.75)
+    explicacion = _ia(system, messages, max_tokens=300, temperature=0.75)
 
     return jsonify({
         "metodo": metodo,
@@ -1232,8 +1525,8 @@ def api_gnosis_recomendar():
 @app.route("/api/gnosis/guia", methods=["POST"])
 @_limitar_request()
 def api_gnosis_guia():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1261,7 +1554,7 @@ def api_gnosis_guia():
         )
 
     messages = [{"role": "user", "content": msg_content}]
-    respuesta = groq_client.chat(system, messages, max_tokens=400, temperature=0.8)
+    respuesta = _ia(system, messages, max_tokens=400, temperature=0.8)
 
     return jsonify({
         "metodo": metodo,
@@ -1277,8 +1570,8 @@ def api_gnosis_guia():
 @app.route("/api/iching/consulta", methods=["POST"])
 @_limitar_request()
 def api_iching_consulta():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1323,7 +1616,7 @@ def api_iching_consulta():
         "Entrega la lectura completa."
     )
 
-    narrativa = groq_client.chat(
+    narrativa = _ia(
         SYSTEM_YIJING,
         [{"role": "user", "content": msg_content}],
         max_tokens=500,
@@ -1357,8 +1650,8 @@ def api_iching_hexagramas():
 @app.route("/api/geomancia/lectura", methods=["POST"])
 @_limitar_request()
 def api_geomancia_lectura():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1399,7 +1692,7 @@ def api_geomancia_lectura():
         "Entrega la lectura completa."
     )
 
-    narrativa = groq_client.chat(
+    narrativa = _ia(
         SYSTEM_GEOMANTE,
         [{"role": "user", "content": msg_content}],
         max_tokens=500,
@@ -1434,8 +1727,8 @@ def api_geomancia_figuras():
 @app.route("/api/servitors/crear", methods=["POST"])
 @_limitar_request()
 def api_servitors_crear():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1456,36 +1749,45 @@ def api_servitors_crear():
         forma = f"Entidad de {deidad_padre.capitalize()}, forma etérea indefinida"
 
     servitor = ServitorRepo.crear(
-        proyecto.hash, nombre, funcion, forma,
+        ctx.hash, nombre, funcion, forma,
         None if deidad_padre == "ninguna" else deidad_padre
     )
     if not servitor:
         return jsonify({"error": "Ya existe un servitor con ese nombre"}), 409
+
+    # Proyectar la intención del servitor al bosque colectivo
+    clave_intencion = " ".join(funcion.split()[:4]).lower()[:40]
+    try:
+        GestorEsferas.marcar("intencion", clave_intencion,
+                             {"servitor": nombre, "proyecto": ctx.hash[:8]},
+                             ctx.hash)
+    except Exception:
+        pass
 
     return jsonify({"servitor": enriquecer(servitor), "display": render_servitor(enriquecer(servitor))})
 
 
 @app.route("/api/servitors/lista", methods=["GET"])
 def api_servitors_lista():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
-    servitors = ServitorRepo.listar(proyecto.hash)
+    servitors = ServitorRepo.listar(ctx.hash)
     enriquecidos = [enriquecer(s) for s in servitors]
     return jsonify({"servitors": enriquecidos})
 
 
 @app.route("/api/servitors/estado/<nombre>", methods=["GET"])
 def api_servitors_estado(nombre: str):
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
     nombre = nombre.strip()[:60]
-    servitor = ServitorRepo.obtener(proyecto.hash, nombre)
+    servitor = ServitorRepo.obtener(ctx.hash, nombre)
     if not servitor:
         return jsonify({"error": "Servitor no encontrado"}), 404
 
@@ -1499,8 +1801,8 @@ def api_servitors_estado(nombre: str):
 
 @app.route("/api/servitors/feed", methods=["POST"])
 def api_servitors_feed():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1509,7 +1811,7 @@ def api_servitors_feed():
     if not nombre:
         return jsonify({"error": "nombre requerido"}), 400
 
-    servitor = ServitorRepo.obtener(proyecto.hash, nombre)
+    servitor = ServitorRepo.obtener(ctx.hash, nombre)
     if not servitor:
         return jsonify({"error": "Servitor no encontrado"}), 404
 
@@ -1521,9 +1823,20 @@ def api_servitors_feed():
     nuevo_est  = calcular_estado(nueva_i, "activo")
 
     actualizado = ServitorRepo.actualizar_intensidad(
-        proyecto.hash, nombre, nueva_i, nuevo_est, actualizar_feed=True
+        ctx.hash, nombre, nueva_i, nuevo_est, actualizar_feed=True
     )
     enriq_nuevo = enriquecer(actualizado)
+
+    # Feed refuerza la esfera de intención en el bosque
+    clave_intencion = " ".join(
+        (enriq_nuevo.get("funcion") or nombre).split()[:4]
+    ).lower()[:40]
+    try:
+        GestorEsferas.marcar("intencion", clave_intencion,
+                             {"servitor": nombre, "feed": True},
+                             ctx.hash)
+    except Exception:
+        pass
 
     return jsonify({
         "servitor":           enriq_nuevo,
@@ -1535,8 +1848,8 @@ def api_servitors_feed():
 
 @app.route("/api/servitors/disolver", methods=["POST"])
 def api_servitors_disolver():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1545,11 +1858,11 @@ def api_servitors_disolver():
     if not nombre:
         return jsonify({"error": "nombre requerido"}), 400
 
-    servitor = ServitorRepo.obtener(proyecto.hash, nombre)
+    servitor = ServitorRepo.obtener(ctx.hash, nombre)
     if not servitor:
         return jsonify({"error": "Servitor no encontrado"}), 404
 
-    ServitorRepo.actualizar_intensidad(proyecto.hash, nombre, 0.0, "disuelto")
+    ServitorRepo.actualizar_intensidad(ctx.hash, nombre, 0.0, "disuelto")
 
     return jsonify({
         "ok":     True,
@@ -1561,8 +1874,8 @@ def api_servitors_disolver():
 @app.route("/api/servitors/invocar", methods=["POST"])
 @_limitar_request()
 def api_servitors_invocar():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1573,7 +1886,7 @@ def api_servitors_invocar():
     if not nombre:
         return jsonify({"error": "nombre requerido"}), 400
 
-    servitor = ServitorRepo.obtener(proyecto.hash, nombre)
+    servitor = ServitorRepo.obtener(ctx.hash, nombre)
     if not servitor:
         return jsonify({"error": "Servitor no encontrado"}), 404
 
@@ -1591,7 +1904,7 @@ def api_servitors_invocar():
 
     msg_content = pregunta or f"Practicante invoca al servitor {nombre}. ¿Qué tienes para decirle sobre tu misión?"
 
-    respuesta = groq_client.chat(
+    respuesta = _ia(
         system,
         [{"role": "user", "content": msg_content}],
         max_tokens=300,
@@ -1613,8 +1926,8 @@ def api_servitors_invocar():
 @app.route("/api/discord/oraculo", methods=["GET"])
 @_limitar_request()
 def api_discord_oraculo():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1638,7 +1951,7 @@ def api_discord_oraculo():
         "Entrega el mensaje de Eris."
     )
 
-    mensaje = groq_client.chat(
+    mensaje = _ia(
         SYSTEM_ERIS,
         [{"role": "user", "content": msg_content}],
         max_tokens=200,
@@ -1664,8 +1977,8 @@ def api_discord_oraculo():
 @app.route("/api/sync/nueva", methods=["POST"])
 @_limitar_request()
 def api_sync_nueva():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1686,8 +1999,16 @@ def api_sync_nueva():
     luna = luna_hoy()
     fase_lunar = luna.get("fase", {}).get("nombre")
 
-    sync = SyncRepo.crear(proyecto.hash, signo, categoria, plazo, fase_lunar)
+    sync = SyncRepo.crear(ctx.hash, signo, categoria, plazo, fase_lunar)
     enriquecida = enriquecer_sync(sync)
+
+    # La posibilidad existe en el bosque — esfera con amplitud base
+    try:
+        GestorEsferas.marcar("sincronicidad", categoria,
+                             {"signo": signo[:60], "fase": fase_lunar},
+                             ctx.hash)
+    except Exception:
+        pass
 
     return jsonify({
         "sync":    enriquecida,
@@ -1699,8 +2020,8 @@ def api_sync_nueva():
 @app.route("/api/sync/confirmar", methods=["POST"])
 @_limitar_request()
 def api_sync_confirmar():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1711,11 +2032,22 @@ def api_sync_confirmar():
     if not sync_id:
         return jsonify({"error": "id requerido"}), 400
 
-    sync = SyncRepo.confirmar(int(sync_id), proyecto.hash, nota or None)
+    sync = SyncRepo.confirmar(int(sync_id), ctx.hash, nota or None)
     if not sync:
         return jsonify({"error": "Sync no encontrada"}), 404
 
     enriquecida = enriquecer_sync(sync)
+
+    # La confirmación amplifica la esfera — el patrón se vuelve real en el bosque
+    try:
+        GestorEsferas.marcar("sincronicidad", sync.get("categoria", "otro"),
+                             {"confirmada": True, "signo": sync.get("signo_esperado", "")[:60]},
+                             ctx.hash)
+        GestorEsferas.marcar("sincronicidad", sync.get("categoria", "otro"),
+                             {"segundo_mark": True}, ctx.hash)
+    except Exception:
+        pass
+
     return jsonify({
         "sync":    enriquecida,
         "display": render_sync(enriquecida),
@@ -1725,19 +2057,19 @@ def api_sync_confirmar():
 
 @app.route("/api/sync/lista", methods=["GET"])
 def api_sync_lista():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
-    syncs = SyncRepo.listar(proyecto.hash)
+    syncs = SyncRepo.listar(ctx.hash)
     return jsonify({"syncs": [enriquecer_sync(s) for s in syncs]})
 
 
 @app.route("/api/sync/colectiva", methods=["GET"])
 def api_sync_colectiva():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1766,8 +2098,8 @@ def api_rayos_preguntas():
 @app.route("/api/rayos/test", methods=["POST"])
 @_limitar_request()
 def api_rayos_test():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1807,7 +2139,7 @@ def api_rayos_test():
         "Entrega el perfil mágico de este practicante según su rayo natal."
     )
 
-    interpretacion = groq_client.chat(
+    interpretacion = _ia(
         SYSTEM_ORACULO_RAYO,
         [{"role": "user", "content": msg_content}],
         max_tokens=300,
@@ -1842,8 +2174,8 @@ def api_paradigm_catalogo():
 @app.route("/api/paradigm/iniciar", methods=["POST"])
 @_limitar_request()
 def api_paradigm_iniciar():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1856,7 +2188,7 @@ def api_paradigm_iniciar():
     paradigma_def = PARADIGMAS[paradigma_id]
 
     # Verificar si ya tiene uno activo
-    activo = ParadigmaRepo.obtener_activo(proyecto.hash)
+    activo = ParadigmaRepo.obtener_activo(ctx.hash)
     if activo:
         return jsonify({
             "error": "Ya tienes un paradigma activo. Complétalo o abandónalo primero.",
@@ -1864,7 +2196,7 @@ def api_paradigm_iniciar():
         }), 409
 
     paradigma = ParadigmaRepo.iniciar(
-        proyecto.hash, paradigma_id,
+        ctx.hash, paradigma_id,
         paradigma_def["nombre"], paradigma_def["deidad_guia"]
     )
     if not paradigma:
@@ -1885,7 +2217,7 @@ def api_paradigm_iniciar():
         "Es el DÍA 1. Guía al practicante en el ritual de entrada y explica qué cambiará en su percepción."
     )
 
-    orientacion = groq_client.chat(
+    orientacion = _ia(
         SYSTEM_PSICONAUTA,
         [{"role": "user", "content": msg_content}],
         max_tokens=300,
@@ -1904,8 +2236,8 @@ def api_paradigm_iniciar():
 @app.route("/api/paradigm/checkin", methods=["POST"])
 @_limitar_request()
 def api_paradigm_checkin():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
@@ -1915,13 +2247,13 @@ def api_paradigm_checkin():
 
     # Si no viene paradigma_id, usar el activo
     if paradigma_id is None:
-        activo = ParadigmaRepo.obtener_activo(proyecto.hash)
+        activo = ParadigmaRepo.obtener_activo(ctx.hash)
         if not activo:
             return jsonify({"error": "No tienes ningún paradigma activo"}), 404
         paradigma_id = activo["paradigma_id"]
 
     paradigma_id = int(paradigma_id)
-    paradigma    = ParadigmaRepo.obtener(proyecto.hash, paradigma_id)
+    paradigma    = ParadigmaRepo.obtener(ctx.hash, paradigma_id)
     if not paradigma:
         return jsonify({"error": "Paradigma no encontrado"}), 404
 
@@ -1932,13 +2264,13 @@ def api_paradigm_checkin():
         nota = f"Check-in día {dia_actual} sin observaciones."
 
     paradigma = ParadigmaRepo.agregar_checkin(
-        proyecto.hash, paradigma_id, nota, dia_actual
+        ctx.hash, paradigma_id, nota, dia_actual
     )
     enriquecido = enriquecer_paradigma(paradigma)
 
     # Si completó los 30 días, marcar como integrado
     if progreso["completado"]:
-        ParadigmaRepo.integrar(proyecto.hash, paradigma_id)
+        ParadigmaRepo.integrar(ctx.hash, paradigma_id)
         enriquecido["estado"] = "integrado"
 
     paradigma_def = PARADIGMAS.get(paradigma_id, {})
@@ -1956,7 +2288,7 @@ def api_paradigm_checkin():
         "Responde al check-in del practicante."
     )
 
-    respuesta = groq_client.chat(
+    respuesta = _ia(
         SYSTEM_PSICONAUTA,
         [{"role": "user", "content": msg_content}],
         max_tokens=280,
@@ -1975,12 +2307,12 @@ def api_paradigm_checkin():
 
 @app.route("/api/paradigm/estado", methods=["GET"])
 def api_paradigm_estado():
-    proyecto = _obtener_proyecto()
-    err = _proyecto_requerido(proyecto)
+    ctx = _contexto()
+    err = _proyecto_requerido(ctx)
     if err:
         return err
 
-    paradigmas = ParadigmaRepo.listar(proyecto.hash)
+    paradigmas = ParadigmaRepo.listar(ctx.hash)
     enriquecidos = [enriquecer_paradigma(p) for p in paradigmas]
     activo = next((p for p in enriquecidos if p["estado"] == "activo"), None)
 
@@ -1988,6 +2320,910 @@ def api_paradigm_estado():
         "paradigmas": enriquecidos,
         "activo":     activo,
     })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  FASE 2: ENDPOINTS USUARIO/EXP/GRIMORIO
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Constantes Capa 1
+CAPA1_MAX_TITULO = 255
+CAPA1_MAX_CONTENIDO = 10000
+CAPA1_MAX_INTENCION = 500
+CAPA1_EXP_NUEVA_ENTRADA = 5
+CAPA1_EXP_NUEVO_SIGILO = 10
+CAPA1_EXP_CARGAR_SIGILO = 25
+ESTADO_SIGILO_CREADO = "creado"
+ESTADO_SIGILO_CARGADO = "cargado"
+
+# ── CAPA 2: LA MESA (Mago Personal) ───────────────────────────────────────
+CAPA2_MAX_ARCANO = 255  # Máximo length para nombre de arcano
+CAPA2_EXP_NUEVA_TIRADA = 5  # Exp por tirada tarot (balance con Capa 1)
+CAPA2_EXP_CARGAR_ORACULO = 10  # Exp por oráculo (runas, I Ching, etc.)
+CAPA2_EXP_CHAT_DEIDAD = 3  # Exp por mensaje con deidad
+
+# ── CAPA 3: EL ÁRBOL (Colectivo) ──────────────────────────────────────────
+CAPA3_MAX_INTENCION = 500  # Máximo length para intención de semilla
+CAPA3_MAX_DESCRIPCION = 500  # Máximo length para descripción de sincronicidad
+CAPA3_MAX_RITUAL = 280  # Máximo length para el ritual de micorriza
+CAPA3_EXP_SEMILLA = 10  # Exp por sembrar un sigilo en El Árbol
+CAPA3_EXP_SYNC = 5  # Exp por registrar una sincronicidad
+CAPA3_EXP_MICORRIZA = 25  # Exp por conectar con otro mago (a ambos)
+CAPA3_SEMILLAS_LIMITE = 50  # Máximo de semillas en listado colectivo
+CAPA3_SYNC_LIMITE = 50  # Máximo de sincronicidades en listado colectivo
+ESFERA_TIPOS_VALIDOS = ("geo", "elemental", "tematica", "resonancia",
+                        "intencion", "sincronicidad", "conocimiento", "paradigma")
+
+_USUARIO_CACHE = {}  # Caché temporal: proyecto_hash → user_id
+_USUARIO_CACHE_LOCK = Lock()
+
+def _obtener_o_crear_usuario_proyecto(proyecto_hash: str) -> int:
+    """Obtener o crear usuario asociado a proyecto (idempotente en la sesión, thread-safe).
+
+    Nota: Caché en memoria solo para sesión. Para persistencia real,
+    guardar user_id en proyecto metadatos via ProyectoRepo.
+    """
+    global _USUARIO_CACHE
+
+    with _USUARIO_CACHE_LOCK:
+        if proyecto_hash in _USUARIO_CACHE:
+            return _USUARIO_CACHE[proyecto_hash]
+
+        nombre_mago = f"Mago-{proyecto_hash[:12]}"
+        usuario = UsuarioRepo.crear(nombre_mago=nombre_mago)
+        _USUARIO_CACHE[proyecto_hash] = usuario["id"]
+        return usuario["id"]
+
+
+def requiere_usuario_capa1(f):
+    """Decorator: obtiene/crea usuario del proyecto y lo pasa a la función.
+
+    Inyecta `user_id` como parámetro a la función decorada.
+    """
+    from functools import wraps
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        ctx = _contexto()
+        err = _proyecto_requerido(ctx)
+        if err:
+            return err
+        user_id = _obtener_o_crear_usuario_proyecto(ctx.hash)
+        return f(user_id=user_id, *args, **kwargs)
+
+    return wrapper
+
+
+def requiere_usuario_capa2(f):
+    """Decorator: igual a requiere_usuario_capa1 (mismo patrón para Capa 2).
+
+    Inyecta `user_id` como parámetro a la función decorada.
+    """
+    return requiere_usuario_capa1(f)
+
+
+@app.route("/api/capa1/usuario/actual", methods=["GET"])
+@requiere_usuario_capa1
+def api_capa1_usuario_actual(user_id: int) -> tuple[dict, int]:
+    """Obtener o crear usuario para proyecto actual."""
+    usuario = UsuarioRepo.obtener(user_id)
+    return jsonify({"usuario": usuario}), 200
+
+
+@app.route("/api/capa1/grimorio/nueva", methods=["POST"])
+@requiere_usuario_capa1
+def api_capa1_grimorio_nueva(user_id: int) -> tuple[dict, int]:
+    """Crear nueva entrada en grimorio."""
+    data = request.get_json() or {}
+    titulo = data.get("titulo", "").strip()
+    contenido = data.get("contenido", "").strip()
+    tags = data.get("tags", "").strip()
+
+    if not titulo or len(titulo) > CAPA1_MAX_TITULO:
+        return jsonify({"error": f"Título inválido (1-{CAPA1_MAX_TITULO} chars)"}), 400
+    if not contenido or len(contenido) > CAPA1_MAX_CONTENIDO:
+        return jsonify({"error": f"Contenido inválido (1-{CAPA1_MAX_CONTENIDO} chars)"}), 400
+
+    entrada = GrimorioRepo.crear(user_id, titulo, contenido, tags or None)
+    ExpRepo.agregar_exp(user_id, "grimorio", CAPA1_EXP_NUEVA_ENTRADA)
+
+    return jsonify({"entrada": entrada}), 201
+
+
+@app.route("/api/capa1/grimorio", methods=["GET"])
+@requiere_usuario_capa1
+def api_capa1_grimorio_listar(user_id: int) -> tuple[dict, int]:
+    """Listar entradas del grimorio."""
+    entradas = GrimorioRepo.listar_por_usuario(user_id)
+    return jsonify({"entradas": entradas, "total": len(entradas)}), 200
+
+
+@app.route("/api/capa1/exp", methods=["GET"])
+@requiere_usuario_capa1
+def api_capa1_exp(user_id: int) -> tuple[dict, int]:
+    """Obtener progreso de experiencia (Capa 1: Grimorio)."""
+    exp = ExpRepo.obtener(user_id, "grimorio")
+    if not exp:
+        exp = ExpRepo.crear_o_actualizar(user_id, "grimorio", 0, 1)
+    return jsonify({"exp": exp}), 200
+
+
+@app.route("/api/capa1/sigilo/dibujar", methods=["POST"])
+@requiere_usuario_capa1
+def api_capa1_sigilo_dibujar(user_id: int) -> tuple[dict, int]:
+    """Dibujar nuevo sigilo."""
+    data = request.get_json() or {}
+    intencion = data.get("intencion", "").strip()
+    dibujo = data.get("dibujo", "").strip()
+
+    if not intencion or len(intencion) > CAPA1_MAX_INTENCION:
+        return jsonify({"error": f"Intención inválida (1-{CAPA1_MAX_INTENCION} chars)"}), 400
+    if not dibujo:
+        return jsonify({"error": "Dibujo requerido"}), 400
+
+    sigilo = SigiloRepo.crear_dibujado(user_id, intencion, dibujo)
+    ExpRepo.agregar_exp(user_id, "grimorio", CAPA1_EXP_NUEVO_SIGILO)
+
+    return jsonify({"sigilo": sigilo}), 201
+
+
+@app.route("/api/capa1/sigilos", methods=["GET"])
+@requiere_usuario_capa1
+def api_capa1_sigilos_listar(user_id: int) -> tuple[dict, int]:
+    """Listar sigilos activos (sin cargar)."""
+    sigilos = SigiloRepo.listar_por_usuario(user_id, estado=ESTADO_SIGILO_CREADO)
+    return jsonify({"sigilos": sigilos, "total": len(sigilos)}), 200
+
+
+@app.route("/api/capa1/sigilo/<int:sigilo_id>/cargar", methods=["POST"])
+@requiere_usuario_capa1
+def api_capa1_sigilo_cargar(user_id: int, sigilo_id: int) -> tuple[dict, int]:
+    """Cargar sigilo (desaparece del dashboard, se olvida)."""
+    sigilo = SigiloRepo.cargar(sigilo_id)
+
+    if not sigilo:
+        return jsonify({"error": "Sigilo no encontrado"}), 404
+
+    ExpRepo.agregar_exp(sigilo["user_id"], "grimorio", CAPA1_EXP_CARGAR_SIGILO)
+
+    return jsonify({"sigilo": sigilo}), 200
+
+
+# ── CAPA 2: LA MESA (Mago Personal) ─────────────────────────────────────────
+
+@app.route("/api/capa2/tarot/nueva", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa2_tarot_nueva(user_id: int) -> tuple[dict, int]:
+    """Crear nueva tirada de tarot personal."""
+    from base_datos.altar import TarotRepo
+
+    data = request.get_json() or {}
+    arcano_principal = data.get("arcano_principal", "").strip()
+    posiciones = data.get("posiciones", {})
+    interpretacion = data.get("interpretacion", "").strip()
+
+    if not arcano_principal or len(arcano_principal) > CAPA2_MAX_ARCANO:
+        return jsonify({"error": f"Arcano inválido (1-{CAPA2_MAX_ARCANO} chars)"}), 400
+    if not isinstance(posiciones, dict) or not posiciones:
+        return jsonify({"error": "Posiciones requeridas (dict no vacío)"}), 400
+
+    tirada_id = TarotRepo.crear(user_id, arcano_principal, posiciones,
+                                interpretacion or None)
+    ExpRepo.agregar_exp(user_id, "tarot", CAPA2_EXP_NUEVA_TIRADA)
+
+    return jsonify({"tirada_id": tirada_id, "exp_ganada": CAPA2_EXP_NUEVA_TIRADA}), 201
+
+
+@app.route("/api/capa2/tarot", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa2_tarot_listar(user_id: int) -> tuple[dict, int]:
+    """Listar tiradas de tarot del usuario."""
+    from base_datos.altar import TarotRepo
+
+    tiradas = TarotRepo.listar_por_usuario(user_id)
+    return jsonify({"tiradas": tiradas, "total": len(tiradas)}), 200
+
+
+@app.route("/api/capa2/oraculo/nueva", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa2_oraculo_nueva(user_id: int) -> tuple[dict, int]:
+    """Consultar oráculo personal (runas, I Ching, geomancia)."""
+    from base_datos.altar import OráculoRepo
+
+    data = request.get_json() or {}
+    tipo = data.get("tipo", "").strip().lower()
+    pregunta = data.get("pregunta", "").strip()
+
+    tipos_validos = ["runas", "iching", "geomancia"]
+    if tipo not in tipos_validos:
+        return jsonify({"error": f"Tipo inválido. Válidos: {', '.join(tipos_validos)}"}), 400
+    if not pregunta:
+        return jsonify({"error": "Pregunta requerida"}), 400
+
+    resultado = _generar_resultado_oraculo(tipo, pregunta)
+
+    oraculo_id = OráculoRepo.crear(user_id, tipo, pregunta, resultado)
+    ExpRepo.agregar_exp(user_id, "oraculo", CAPA2_EXP_CARGAR_ORACULO)
+
+    return jsonify({"oraculo_id": oraculo_id, "exp_ganada": CAPA2_EXP_CARGAR_ORACULO}), 201
+
+
+@app.route("/api/capa2/oraculo", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa2_oraculo_listar(user_id: int) -> tuple[dict, int]:
+    """Listar oráculos del usuario, opcionalmente filtrado por tipo."""
+    from base_datos.altar import OráculoRepo
+
+    tipo = request.args.get("tipo", "").strip().lower()
+
+    if tipo:
+        oráculos = OráculoRepo.listar_por_tipo(user_id, tipo)
+    else:
+        oráculos = OráculoRepo.listar_por_usuario(user_id)
+
+    return jsonify({"oráculos": oráculos, "total": len(oráculos)}), 200
+
+
+def _generar_resultado_oraculo(tipo: str, pregunta: str) -> dict:
+    """Generar resultado de oráculo basado en tipo (mock para TB #7)."""
+    if tipo == "runas":
+        return {
+            "runas": ["Fehu", "Isa"],
+            "significado": "Abundancia y pausa reflexiva",
+            "consejo": "Considera lo que tienes y lo que necesita descanso"
+        }
+    elif tipo == "iching":
+        return {
+            "hexagrama": 11,
+            "nombre": "Tai",
+            "interpretacion": "La paz prevalece",
+            "línea": 2
+        }
+    elif tipo == "geomancia":
+        return {
+            "figuras": ["Acquisitio", "Laetitia"],
+            "casa": "Primera",
+            "significado": "Adquisición y alegría"
+        }
+    return {}
+
+
+@app.route("/api/capa2/deidad/<nombre>/hablar", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa2_hablar_deidad(user_id: int, nombre: str) -> tuple[dict, int]:
+    """Conversar con deidad personal."""
+    from base_datos.altar import ConversacionCapaRepo
+
+    nombre = nombre.lower().capitalize()  # "lilith" → "Lilith"
+    deidades_validas = ["Lilith", "Artemisa", "Afrodita", "Isis"]
+
+    if nombre not in deidades_validas:
+        return jsonify({"error": f"Deidad inválida. Válidas: {', '.join(deidades_validas)}"}), 400
+
+    data = request.get_json() or {}
+    mensaje = data.get("mensaje", "").strip()
+
+    if not mensaje:
+        return jsonify({"error": "Mensaje requerido"}), 400
+
+    # Guardar mensaje del usuario
+    ConversacionCapaRepo.guardar_mensaje(user_id, nombre, "user", mensaje)
+
+    # Generar respuesta de deidad (mock para TB #8)
+    respuesta = _generar_respuesta_deidad(nombre, mensaje)
+
+    # Guardar respuesta de deidad
+    ConversacionCapaRepo.guardar_mensaje(user_id, nombre, "deidad", respuesta)
+
+    ExpRepo.agregar_exp(user_id, "deidad", CAPA2_EXP_CHAT_DEIDAD)
+
+    return jsonify({"respuesta": respuesta, "exp_ganada": CAPA2_EXP_CHAT_DEIDAD}), 200
+
+
+@app.route("/api/capa2/deidad/<nombre>/historial", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa2_historial_deidad(user_id: int, nombre: str) -> tuple[dict, int]:
+    """Obtener historial de conversación con deidad."""
+    from base_datos.altar import ConversacionCapaRepo
+
+    nombre = nombre.lower().capitalize()
+    deidades_validas = ["Lilith", "Artemisa", "Afrodita", "Isis"]
+
+    if nombre not in deidades_validas:
+        return jsonify({"error": f"Deidad inválida. Válidas: {', '.join(deidades_validas)}"}), 400
+
+    historial = ConversacionCapaRepo.obtener_historial(user_id, nombre)
+    return jsonify({"historial": historial, "total": len(historial)}), 200
+
+
+def _generar_respuesta_deidad(nombre: str, mensaje: str) -> str:
+    """Generar respuesta de deidad (mock para TB #8, mejora en producción con IA)."""
+    respuestas = {
+        "Lilith": "Tu libertad es tu poder. ¿Qué cadenas te atan?",
+        "Artemisa": "La claridad viene de la acción. Caza lo que es tuyo.",
+        "Afrodita": "El amor que buscas comienza en ti. Cultiva tu belleza interior.",
+        "Isis": "La magia de la transformación ya está en tus manos. Recuerda quien eres.",
+    }
+    return respuestas.get(nombre, "Escucho tu pregunta. Reflexiona profundamente.")
+
+
+@app.route("/api/capa2/servitor/crear", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa2_servitor_crear(user_id: int) -> tuple[dict, int]:
+    """Crear nuevo servitor personal."""
+    from base_datos.altar import ServitorCapaRepo
+
+    data = request.get_json() or {}
+    nombre = data.get("nombre", "").strip()
+    intencion = data.get("intencion", "").strip()
+
+    if not nombre:
+        return jsonify({"error": "Nombre del servitor requerido"}), 400
+    if not intencion:
+        return jsonify({"error": "Intención requerida"}), 400
+
+    servitor_id = ServitorCapaRepo.crear(user_id, nombre, intencion)
+
+    return jsonify({"servitor_id": servitor_id, "exp_ganada": 0}), 201
+
+
+@app.route("/api/capa2/servitor", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa2_servitor_listar(user_id: int) -> tuple[dict, int]:
+    """Listar servitors del usuario."""
+    from base_datos.altar import ServitorCapaRepo
+
+    servitors = ServitorCapaRepo.listar_por_usuario(user_id)
+    return jsonify({"servitors": servitors, "total": len(servitors)}), 200
+
+
+@app.route("/api/capa2/servitor/<int:servitor_id>/evocar", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa2_servitor_evocar(user_id: int, servitor_id: int) -> tuple[dict, int]:
+    """Evocar servitor (aumentar energía)."""
+    from base_datos.altar import ServitorCapaRepo
+
+    servitor = ServitorCapaRepo.evocar(servitor_id)
+
+    if not servitor:
+        return jsonify({"error": "Servitor no encontrado"}), 404
+
+    if servitor['user_id'] != user_id:
+        return jsonify({"error": "Servitor no pertenece a este usuario"}), 403
+
+    ExpRepo.agregar_exp(user_id, "servitor", 5)
+
+    return jsonify({"energia": servitor["energia"], "exp_ganada": 5}), 200
+
+
+# ── CAPA 3: EL ÁRBOL (Colectivo - Bosque Vivo) ──────────────────────────────
+
+@app.route("/api/capa3/esferas", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa3_esferas_listar(user_id: int) -> tuple[dict, int]:
+    """Listar esferas del usuario (opcionalmente filtrado por tipo)."""
+    from base_datos.bosque import EsferaCapaRepo
+
+    tipo = request.args.get("tipo", "").strip().lower()
+
+    if tipo:
+        esferas = EsferaCapaRepo.listar_por_tipo(user_id, tipo)
+    else:
+        esferas = EsferaCapaRepo.listar_por_usuario(user_id)
+
+    return jsonify({"esferas": esferas, "total": len(esferas)}), 200
+
+
+@app.route("/api/capa3/semilla/sigilo", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa3_semilla_sigilo(user_id: int) -> tuple[dict, int]:
+    """Sembrar un sigilo de Capa 1 en El Árbol (Capa 3)."""
+    from base_datos.bosque import SigiloAportadoRepo, EsferaCapaRepo
+
+    data = request.get_json() or {}
+    sigilo_dibujado_id = data.get("sigilo_dibujado_id")
+    esfera_tipo = (data.get("esfera_tipo", "") or "").strip().lower()
+    esfera_clave = (data.get("esfera_clave", "") or "").strip().lower()
+    intencion = (data.get("intencion", "") or "").strip()
+
+    if not isinstance(sigilo_dibujado_id, int):
+        return jsonify({"error": "sigilo_dibujado_id requerido"}), 400
+    if esfera_tipo not in ESFERA_TIPOS_VALIDOS:
+        return jsonify({"error": "esfera_tipo inválido"}), 400
+    if not esfera_clave:
+        return jsonify({"error": "esfera_clave requerida"}), 400
+
+    # El sigilo debe existir y pertenecer al usuario (privacidad).
+    sigilo = SigiloRepo.obtener(sigilo_dibujado_id)
+    if not sigilo or sigilo["user_id"] != user_id:
+        return jsonify({"error": "Sigilo no encontrado"}), 404
+
+    # La intención por defecto es la del sigilo original (snapshot).
+    if not intencion:
+        intencion = sigilo["intencion"]
+    if len(intencion) > CAPA3_MAX_INTENCION:
+        return jsonify({"error": f"Intención > {CAPA3_MAX_INTENCION} chars"}), 400
+
+    esfera_id = EsferaCapaRepo.obtener_o_crear(user_id, esfera_tipo, esfera_clave)
+    semilla_id = SigiloAportadoRepo.aportar(
+        user_id, sigilo_dibujado_id, esfera_id, intencion
+    )
+    ExpRepo.agregar_exp(user_id, "arbol", CAPA3_EXP_SEMILLA)
+
+    return jsonify({
+        "semilla_id": semilla_id,
+        "estado": "germinando",
+        "esfera_id": esfera_id,
+        "exp_ganada": CAPA3_EXP_SEMILLA,
+    }), 201
+
+
+@app.route("/api/capa3/semillas", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa3_semillas_listar(user_id: int) -> tuple[dict, int]:
+    """Listar semillas del colectivo (anónimas) o de una esfera concreta."""
+    from base_datos.bosque import SigiloAportadoRepo
+
+    esfera_id = request.args.get("esfera_id", "").strip()
+
+    if esfera_id.isdigit():
+        semillas = SigiloAportadoRepo.listar_por_esfera(int(esfera_id))
+    else:
+        semillas = SigiloAportadoRepo.listar_anonimos(CAPA3_SEMILLAS_LIMITE)
+
+    return jsonify({"semillas": semillas, "total": len(semillas)}), 200
+
+
+@app.route("/api/capa3/sync/registrar", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa3_sync_registrar(user_id: int) -> tuple[dict, int]:
+    """Registrar una sincronicidad observada (captura la fase lunar de hoy)."""
+    from base_datos.bosque import SincronicidadCapaRepo
+    from luna import calcular_fase
+
+    data = request.get_json() or {}
+    descripcion = (data.get("descripcion", "") or "").strip()
+    categoria = (data.get("categoria", "") or "").strip().lower() or "general"
+
+    if not descripcion:
+        return jsonify({"error": "descripcion requerida"}), 400
+    if len(descripcion) > CAPA3_MAX_DESCRIPCION:
+        return jsonify({"error": f"Descripción > {CAPA3_MAX_DESCRIPCION} chars"}), 400
+    if len(categoria) > 50:
+        return jsonify({"error": "categoria > 50 chars"}), 400
+
+    fase_lunar = calcular_fase()["clave"]
+    sync_id = SincronicidadCapaRepo.registrar(
+        user_id, descripcion, categoria, fase_lunar
+    )
+    ExpRepo.agregar_exp(user_id, "arbol", CAPA3_EXP_SYNC)
+
+    return jsonify({
+        "sync_id": sync_id,
+        "fase_lunar": fase_lunar,
+        "exp_ganada": CAPA3_EXP_SYNC,
+    }), 201
+
+
+@app.route("/api/capa3/sync", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa3_sync_listar(user_id: int) -> tuple[dict, int]:
+    """Listar sincronicidades del colectivo (anónimas), filtrable por fase."""
+    from base_datos.bosque import SincronicidadCapaRepo
+
+    fase = request.args.get("fase", "").strip().lower()
+    confirmadas = request.args.get("confirmadas", "").strip() == "1"
+
+    if fase:
+        syncs = SincronicidadCapaRepo.listar_por_fase(fase, CAPA3_SYNC_LIMITE)
+    elif confirmadas:
+        syncs = SincronicidadCapaRepo.listar_confirmadas(CAPA3_SYNC_LIMITE)
+    else:
+        syncs = SincronicidadCapaRepo.listar_recientes(CAPA3_SYNC_LIMITE)
+
+    return jsonify({"sincronicidades": syncs, "total": len(syncs)}), 200
+
+
+@app.route("/api/capa3/sync/confirmar", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa3_sync_confirmar(user_id: int) -> tuple[dict, int]:
+    """Confirmar una sincronicidad (el colectivo la valida)."""
+    from base_datos.bosque import SincronicidadCapaRepo
+
+    data = request.get_json() or {}
+    sync_id = data.get("sync_id")
+
+    if not isinstance(sync_id, int):
+        return jsonify({"error": "sync_id requerido"}), 400
+
+    sync = SincronicidadCapaRepo.confirmar(sync_id)
+    if not sync:
+        return jsonify({"error": "Sincronicidad no encontrada"}), 404
+
+    return jsonify({"sincronicidad": sync}), 200
+
+
+@app.route("/api/capa3/micorriza/conectar", methods=["POST"])
+@requiere_usuario_capa2
+def api_capa3_micorriza_conectar(user_id: int) -> tuple[dict, int]:
+    """Crear conexión ritual (micorriza) entre el mago actual y otro."""
+    from base_datos.bosque import MicorrizaRepo
+
+    data = request.get_json() or {}
+    otro_mago_id = data.get("otro_mago_id")
+    ritual = (data.get("ritual", "") or "").strip()
+
+    if not isinstance(otro_mago_id, int):
+        return jsonify({"error": "otro_mago_id requerido"}), 400
+    if otro_mago_id == user_id:
+        return jsonify({"error": "No puedes conectarte contigo mismo"}), 400
+    if not ritual:
+        return jsonify({"error": "ritual requerido"}), 400
+    if len(ritual) > CAPA3_MAX_RITUAL:
+        return jsonify({"error": f"Ritual > {CAPA3_MAX_RITUAL} chars"}), 400
+
+    # El otro mago debe existir (privacidad: no se revela nada de él).
+    otro = UsuarioRepo.obtener(otro_mago_id)
+    if not otro:
+        return jsonify({"error": "Mago no encontrado"}), 404
+
+    # Idempotente: si ya hay conexión activa, no duplicar ni re-otorgar exp.
+    existente = MicorrizaRepo.obtener_activa_entre(user_id, otro_mago_id)
+    if existente:
+        return jsonify({
+            "micorriza_id": existente["id"],
+            "ya_conectados": True,
+            "exp_ganada": 0,
+        }), 200
+
+    micorriza_id = MicorrizaRepo.conectar(user_id, otro_mago_id, ritual)
+    # El cruce nutre a ambos magos.
+    ExpRepo.agregar_exp(user_id, "arbol", CAPA3_EXP_MICORRIZA)
+    ExpRepo.agregar_exp(otro_mago_id, "arbol", CAPA3_EXP_MICORRIZA)
+
+    return jsonify({
+        "micorriza_id": micorriza_id,
+        "ya_conectados": False,
+        "exp_ganada": CAPA3_EXP_MICORRIZA,
+    }), 201
+
+
+@app.route("/api/capa3/micorriza", methods=["GET"])
+@requiere_usuario_capa2
+def api_capa3_micorriza_listar(user_id: int) -> tuple[dict, int]:
+    """Listar conexiones activas del mago (nombre del otro, sin datos privados)."""
+    from base_datos.bosque import MicorrizaRepo
+
+    activas = MicorrizaRepo.listar_activas(user_id)
+
+    conexiones = []
+    for c in activas:
+        otro = UsuarioRepo.obtener(c["otro_mago_id"])
+        conexiones.append({
+            "id": c["id"],
+            "otro_mago": otro["nombre_mago"] if otro else "Mago desconocido",
+            "ritual": c["ritual"],
+            "created_at": c["created_at"],
+        })
+
+    return jsonify({"conexiones": conexiones, "total": len(conexiones)}), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  BIBLIOTECA COMUNITARIA
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MAX_CONTENIDO_BIBLIOTECA = 100_000
+_MAX_FUENTE_LEN = 1000
+_MAX_CONTRIB_LEN = 20_000
+
+
+@app.route("/api/biblioteca/dominios", methods=["GET"])
+def bib_dominios():
+    return jsonify({"dominios": EntradaRepo.listar_dominios()}), 200
+
+
+@app.route("/api/biblioteca/entradas", methods=["GET"])
+def bib_listar():
+    dominio = request.args.get("dominio") or None
+    estado  = request.args.get("estado") or None
+    q       = request.args.get("q") or None
+    try:
+        limite  = min(int(request.args.get("limite", 50)), 100)
+        offset  = max(int(request.args.get("offset", 0)), 0)
+    except ValueError:
+        return jsonify({"error": "limite/offset deben ser enteros"}), 400
+
+    entradas = EntradaRepo.listar(
+        dominio=dominio, estado=estado, q=q,
+        limite=limite, offset=offset,
+    )
+    return jsonify({"entradas": entradas, "total": len(entradas)}), 200
+
+
+@app.route("/api/biblioteca/entradas/<slug>", methods=["GET"])
+def bib_obtener(slug: str):
+    entrada = obtener_entrada_completa(slug)
+    if not entrada:
+        return jsonify({"error": "Entrada no encontrada"}), 404
+    return jsonify(entrada), 200
+
+
+@app.route("/api/biblioteca/entradas", methods=["POST"])
+@_limitar_request()
+def bib_crear():
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code para contribuir"}), 401
+
+    data = request.get_json(silent=True) or {}
+    error = validar_nueva_entrada(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    slug = _slugify(data["titulo"])
+    if EntradaRepo.por_slug(slug):
+        slug = f"{slug}-{_bib_hash(data['titulo'])[:6]}"
+
+    entrada = EntradaRepo.crear(
+        titulo=data["titulo"],
+        slug=slug,
+        dominio=data["dominio"],
+        contenido=data["contenido"],
+        hash_autor=ctx.hash,
+    )
+    return jsonify(entrada), 201
+
+
+@app.route("/api/biblioteca/entradas/<slug>/fuente", methods=["POST"])
+@_limitar_request()
+def bib_agregar_fuente(slug: str):
+    entrada = EntradaRepo.por_slug(slug)
+    if not entrada:
+        return jsonify({"error": "Entrada no encontrada"}), 404
+
+    data = request.get_json(silent=True) or {}
+    error = validar_fuente(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    fuente = FuenteRepo.agregar(
+        entrada_id=entrada["id"],
+        tipo=data["tipo"],
+        referencia=data["referencia"],
+    )
+    entrada_actualizada = EntradaRepo.por_slug(slug)
+    return jsonify({
+        "fuente": fuente,
+        "estado_entrada": entrada_actualizada["estado"],
+    }), 201
+
+
+@app.route("/api/biblioteca/entradas/<slug>/resonancia", methods=["POST"])
+@_limitar_request()
+def bib_resonancia(slug: str):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code para resonar"}), 401
+
+    entrada = EntradaRepo.por_slug(slug)
+    if not entrada:
+        return jsonify({"error": "Entrada no encontrada"}), 404
+
+    data = request.get_json(silent=True) or {}
+    error = validar_resonancia(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    resultado = ResonanciaRepo.marcar(
+        entrada_id=entrada["id"],
+        tipo=data["tipo"],
+        hash_proyecto=ctx.hash,
+    )
+
+    # Resonar conocimiento amplifica la esfera de ese dominio en el bosque
+    if not resultado.get("ya_marcada"):
+        try:
+            GestorEsferas.marcar(
+                "conocimiento", entrada["dominio"],
+                {"entrada": slug, "resonancia": data["tipo"]},
+                ctx.hash,
+            )
+        except Exception:
+            pass
+
+    return jsonify(resultado), 200
+
+
+@app.route("/api/biblioteca/entradas/<slug>/contribuir", methods=["POST"])
+@_limitar_request()
+def bib_contribuir(slug: str):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code para contribuir"}), 401
+
+    entrada = EntradaRepo.por_slug(slug)
+    if not entrada:
+        return jsonify({"error": "Entrada no encontrada"}), 404
+
+    data = request.get_json(silent=True) or {}
+    error = validar_contribucion(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    contrib = ContribucionRepo.proponer(
+        entrada_id=entrada["id"],
+        tipo=data["tipo"],
+        contenido=data["contenido"],
+        hash_autor=ctx.hash,
+    )
+    return jsonify(contrib), 201
+
+
+@app.route("/api/biblioteca/entradas/<slug>/contribuciones", methods=["GET"])
+def bib_contribuciones(slug: str):
+    entrada = EntradaRepo.por_slug(slug)
+    if not entrada:
+        return jsonify({"error": "Entrada no encontrada"}), 404
+    pendientes = ContribucionRepo.listar_pendientes(entrada["id"])
+    return jsonify({"contribuciones": pendientes}), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ARTEMISA — MAPA PLANETARIO
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/artemisa/mapa-planetario", methods=["GET"])
+def artemisa_mapa_planetario():
+    """Skill especial de Artemisa: superpone esferas geo del bosque con
+    correspondencias chakra/sephiroth para producir un mapa del mundo vivo."""
+    try:
+        from grimorio_base import CHAKRAS, CHAKRAS_ARTEMISA_SOCIAL, ARBOL_VIDA_SEPHIROTH
+    except ImportError:
+        return jsonify({"error": "grimorio_base no disponible"}), 500
+
+    # Chakras como niveles del planeta (Cuerpo / Alma / Espíritu)
+    cuerpo_planetario = {}
+    for n, c in CHAKRAS.items():
+        cuerpo_planetario[str(n)] = {
+            "chakra": c["nombre"],
+            "ubicacion": c["ubicacion"],
+            "dominio_individual": c["dominio"],
+            "dominio_planetario": CHAKRAS_ARTEMISA_SOCIAL.get(n, ""),
+            "capa": "cuerpo" if n <= 3 else ("alma" if n <= 5 else "espiritu"),
+        }
+
+    # Sephiroth superpuestos sobre el cuerpo planetario
+    arbol_planetario = {}
+    for n, s in ARBOL_VIDA_SEPHIROTH.items():
+        arbol_planetario[str(n)] = {
+            "sephira": s["nombre"],
+            "significado": s["significado"],
+        }
+
+    # Esferas geo activas del bosque (el pulso físico del planeta)
+    try:
+        geo_esferas = GestorEsferas.listar_activas(tipo="geo", amplitud_min=0.1)
+        geo_esferas_sorted = sorted(geo_esferas, key=lambda x: -x.get("amplitud_actual", 0))
+    except Exception:
+        geo_esferas_sorted = []
+
+    # Esferas de intención y sincronicidad (Alma del planeta)
+    try:
+        alma_esferas = []
+        for tipo_alma in ("intencion", "sincronicidad"):
+            alma_esferas += GestorEsferas.listar_activas(tipo=tipo_alma, amplitud_min=0.1)
+        alma_esferas = sorted(alma_esferas, key=lambda x: -x.get("amplitud_actual", 0))[:10]
+    except Exception:
+        alma_esferas = []
+
+    # Entradas de conocimiento verificado (Espíritu del planeta)
+    try:
+        from base_datos.biblioteca import EntradaRepo as _BibRepo
+        espiritu_entradas = _BibRepo.listar(dominio="artemisa_energia_planetaria", limite=10)
+        espiritu_entradas += _BibRepo.listar(dominio="cuerpo_energetico", limite=5)
+        espiritu_entradas = sorted(espiritu_entradas, key=lambda x: -x.get("resonancia", 0))[:8]
+    except Exception:
+        espiritu_entradas = []
+
+    return jsonify({
+        "cuerpo_planetario": cuerpo_planetario,
+        "arbol_planetario": arbol_planetario,
+        "pulso": {
+            "cuerpo": geo_esferas_sorted,
+            "alma": alma_esferas,
+            "espiritu": [
+                {"slug": e["slug"], "titulo": e["titulo"],
+                 "estado": e["estado"], "resonancia": e.get("resonancia", 0)}
+                for e in espiritu_entradas
+            ],
+        },
+        "interpretacion": (
+            "Cuerpo = ecorregiones activas (chakras 1-3). "
+            "Alma = intenciones y sincronicidades colectivas (chakras 4-5). "
+            "Espíritu = conocimiento verificado en la biblioteca (chakras 6-7)."
+        ),
+        "guardiana": "artemisa",
+    }), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PROYECTO — ESTADO UNIFICADO
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/proyecto/estado", methods=["GET"])
+def proyecto_estado():
+    """Estado unificado de un proyecto: esferas, servitors, syncs,
+    última consulta y entradas de biblioteca relacionadas."""
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Proyecto requerido"}), 401
+
+    resultado: dict = {"proyecto": True}
+
+    # Esferas marcadas por este proyecto
+    try:
+        from base_datos.esferas import EsferaRepo
+        marcas = EsferaRepo.marcas_por_proyecto(ctx.hash)
+        resultado["esferas_proyecto"] = marcas
+    except Exception:
+        resultado["esferas_proyecto"] = []
+
+    # Top esferas colectivas para contexto
+    try:
+        todas = GestorEsferas.listar_activas(amplitud_min=1.0)
+        resultado["esferas_colectivas_top"] = sorted(
+            todas, key=lambda x: -x.get("amplitud_actual", 0)
+        )[:5]
+    except Exception:
+        resultado["esferas_colectivas_top"] = []
+
+    # Servitors activos de este proyecto
+    try:
+        from base_datos.practicas import ServitorRepo as _ServRepo
+        resultado["servitors"] = _ServRepo.listar(ctx.hash)
+    except Exception:
+        resultado["servitors"] = []
+
+    # Syncs recientes de este proyecto
+    try:
+        from base_datos.practicas import SyncRepo as _SyncRepo
+        resultado["syncs"] = _SyncRepo.listar(ctx.hash)[:5]
+    except Exception:
+        resultado["syncs"] = []
+
+    # Última conversación (timestamp de último mensaje)
+    try:
+        from base_datos.proyecto import ConversacionRepo
+        ultima = ConversacionRepo.ultima_actividad(ctx.hash)
+        resultado["ultima_consulta"] = ultima
+    except Exception:
+        resultado["ultima_consulta"] = None
+
+    # Entradas biblioteca creadas o resonadas por este proyecto
+    try:
+        from base_datos.biblioteca import EntradaRepo as _BibRepo, ResonanciaRepo as _ResRepo
+        creadas = _BibRepo.listar(hash_autor=ctx.hash, limite=10)
+        resonadas = _ResRepo.por_proyecto(ctx.hash)
+        resultado["biblioteca"] = {
+            "creadas": [{"slug": e["slug"], "titulo": e["titulo"], "estado": e["estado"]}
+                        for e in creadas],
+            "resonadas": resonadas,
+        }
+    except Exception:
+        resultado["biblioteca"] = {"creadas": [], "resonadas": []}
+
+    return jsonify(resultado), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  VERIFICAR GROQ
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _verificar_groq():
+    return invocador.cliente_ia.verificar()
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════

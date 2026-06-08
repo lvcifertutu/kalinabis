@@ -11,8 +11,18 @@ build/
 node_modules/
 *.log
 *.png
-front_terminal/
 graphify-out/
 kalinabis/
 .agents/
 skills-lock.json
+
+# Next.js build output
+.next/
+out/
+
+# Local env (contiene secretos como GROQ_API_KEY)
+.env.local
+.env*.local
+
+# TS build info
+*.tsbuildinfo
