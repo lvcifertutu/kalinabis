@@ -1,0 +1,211 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+/* ── Design Tokens ─────────────────────────────────────────────────────────── */
+:root {
+  /* Fuentes */
+  --font-display:   'Cinzel', 'Georgia', serif;
+  --font-deco:      'Cinzel Decorative', 'Georgia', serif;
+  --font-body:      'Crimson Text', 'Georgia', serif;
+  --font-sacred:    'IM Fell English', 'Georgia', serif;
+
+  /* Capa 1 — Librería */
+  --lib-bg:         #1a1410;
+  --lib-surface:    #231d17;
+  --lib-parchment:  #f5f1e8;
+  --lib-gold:       #c89d5c;
+  --lib-gold-dim:   #8b6b3a;
+  --lib-wood:       #8b7355;
+  --lib-ink:        #2c1810;
+  --lib-warm:       #d4a574;
+
+  /* Capa 2 — Altar (base, cambia por deidad) */
+  --altar-bg:       #060810;
+  --altar-surface:  #0d1020;
+  --altar-candle:   #ffd700;
+  --altar-ember:    #ff6b2b;
+
+  /* Capa 3 — Bosque */
+  --forest-bg:      #081510;
+  --forest-deep:    #0f2318;
+  --forest-green:   #2d6a4f;
+  --forest-bright:  #7aba00;
+  --forest-moon:    #e8e0d0;
+  --forest-silver:  #a0b0a8;
+
+  /* Deidad activa — por defecto Lilith */
+  --deidad-primary:  #8b3a5c;
+  --deidad-bright:   #c0507a;
+  --deidad-accent:   #e8a0b0;
+  --deidad-glow:     rgba(192, 80, 122, 0.25);
+  --deidad-deep:     rgba(139, 58, 92, 0.15);
+
+  /* Global */
+  --border-sacred:  rgba(200, 157, 92, 0.2);
+  --text-ghost:     rgba(245, 241, 232, 0.35);
+}
+
+/* ── Paletas por deidad ────────────────────────────────────────────────────── */
+[data-deity="lilith"] {
+  --deidad-primary: #8b3a5c;
+  --deidad-bright:  #c0507a;
+  --deidad-accent:  #e8a0b0;
+  --deidad-glow:    rgba(192, 80, 122, 0.25);
+  --deidad-deep:    rgba(139, 58, 92, 0.15);
+}
+[data-deity="artemisa"] {
+  --deidad-primary: #4a7a8a;
+  --deidad-bright:  #7ab8cc;
+  --deidad-accent:  #c8e8f0;
+  --deidad-glow:    rgba(122, 184, 204, 0.25);
+  --deidad-deep:    rgba(74, 122, 138, 0.15);
+}
+[data-deity="afrodita"] {
+  --deidad-primary: #9a6070;
+  --deidad-bright:  #d4899a;
+  --deidad-accent:  #f0c8d0;
+  --deidad-glow:    rgba(212, 137, 154, 0.25);
+  --deidad-deep:    rgba(154, 96, 112, 0.15);
+}
+[data-deity="isis"] {
+  --deidad-primary: #3a6a8a;
+  --deidad-bright:  #5a98bc;
+  --deidad-accent:  #c8e0f0;
+  --deidad-glow:    rgba(90, 152, 188, 0.25);
+  --deidad-deep:    rgba(58, 106, 138, 0.15);
+}
+[data-deity="lucifer"] {
+  --deidad-primary: #8a7a3a;
+  --deidad-bright:  #c8b060;
+  --deidad-accent:  #f0e0a0;
+  --deidad-glow:    rgba(200, 176, 96, 0.25);
+  --deidad-deep:    rgba(138, 122, 58, 0.15);
+}
+[data-deity="sunwukong"] {
+  --deidad-primary: #8a3a2a;
+  --deidad-bright:  #c85030;
+  --deidad-accent:  #f08060;
+  --deidad-glow:    rgba(200, 80, 48, 0.25);
+  --deidad-deep:    rgba(138, 58, 42, 0.15);
+}
+[data-deity="heyoka"] {
+  --deidad-primary: #6a5a8a;
+  --deidad-bright:  #9878cc;
+  --deidad-accent:  #c8b8f0;
+  --deidad-glow:    rgba(152, 120, 204, 0.25);
+  --deidad-deep:    rgba(106, 90, 138, 0.15);
+}
+[data-deity="christuddha"] {
+  --deidad-primary: #7a8a7a;
+  --deidad-bright:  #a8c0a8;
+  --deidad-accent:  #d8e8d8;
+  --deidad-glow:    rgba(168, 192, 168, 0.25);
+  --deidad-deep:    rgba(122, 138, 122, 0.15);
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  background: #060810;
+  color: var(--lib-parchment);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5 {
+  font-family: var(--font-display);
+  letter-spacing: 0.05em;
+}
+
+/* ── Scrollbar sagrado ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-sacred);
+  border-radius: 2px;
+}
+
+/* ── Grain overlay ─────────────────────────────────────────────────────────── */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-size: 128px 128px;
+}
+
+/* ── Animaciones globales ──────────────────────────────────────────────────── */
+@keyframes flicker {
+  0%, 100%  { opacity: 1; transform: scaleX(1) scaleY(1); }
+  12%       { opacity: 0.88; transform: scaleX(0.96) scaleY(1.04); }
+  27%       { opacity: 0.96; transform: scaleX(1.02) scaleY(0.97); }
+  48%       { opacity: 0.82; transform: scaleX(0.98) scaleY(1.06); }
+  63%       { opacity: 0.94; transform: scaleX(1.01) scaleY(0.98); }
+  82%       { opacity: 0.88; transform: scaleX(0.97) scaleY(1.03); }
+}
+
+@keyframes flame-body {
+  0%, 100%  { clip-path: polygon(50% 0%, 80% 60%, 100% 85%, 70% 100%, 30% 100%, 0% 85%, 20% 60%); }
+  25%       { clip-path: polygon(55% 0%, 85% 55%, 95% 90%, 65% 100%, 35% 100%, 5% 90%, 18% 58%); }
+  50%       { clip-path: polygon(48% 0%, 78% 62%, 98% 82%, 72% 100%, 28% 100%, 2% 82%, 22% 62%); }
+  75%       { clip-path: polygon(52% 0%, 82% 58%, 100% 88%, 68% 100%, 32% 100%, 0% 88%, 19% 56%); }
+}
+
+@keyframes breathe {
+  0%, 100%  { transform: scale(1); opacity: 0.8; }
+  50%       { transform: scale(1.03); opacity: 1; }
+}
+
+@keyframes float-up {
+  0%        { transform: translateY(0) rotate(0deg); opacity: 0.7; }
+  50%       { transform: translateY(-12px) rotate(2deg); opacity: 1; }
+  100%      { transform: translateY(0) rotate(-1deg); opacity: 0.7; }
+}
+
+@keyframes shimmer-gold {
+  0%, 100%  { background-position: 0% 50%; }
+  50%       { background-position: 100% 50%; }
+}
+
+@keyframes reveal-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes veil-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes orb-drift {
+  0%, 100%  { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(8px, -12px) scale(1.05); }
+  66%       { transform: translate(-6px, 8px) scale(0.97); }
+}
+
+@keyframes particle-rise {
+  0%   { transform: translateY(0) translateX(0) scale(1); opacity: 0.6; }
+  100% { transform: translateY(-80px) translateX(var(--dx, 10px)) scale(0); opacity: 0; }
+}
+
+@keyframes leaf-sway {
+  0%, 100%  { transform: rotate(-3deg) scale(1); }
+  50%       { transform: rotate(3deg) scale(1.02); }
+}

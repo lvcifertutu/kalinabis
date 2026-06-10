@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 DB_PATH = Path(__file__).parent / "grimorio.db"
 
 
@@ -109,5 +110,14 @@ def crear_adaptador() -> AdaptadorBD:
     return AdaptadorSQLite()
 
 
-# Adapter activo del proceso (seleccionado una vez al importar).
+def crear_adaptador_biblioteca() -> AdaptadorBD:
+    """Adapter para la biblioteca colectiva: Supabase si hay SUPABASE_DB_URL,
+    si no cae al adaptador local (útil en desarrollo sin Supabase)."""
+    if SUPABASE_DB_URL:
+        return AdaptadorPostgres(SUPABASE_DB_URL)
+    return crear_adaptador()
+
+
+# Adapters activos del proceso (seleccionados una vez al importar).
 ADAPTADOR: AdaptadorBD = crear_adaptador()
+ADAPTADOR_BIBLIOTECA: AdaptadorBD = crear_adaptador_biblioteca()

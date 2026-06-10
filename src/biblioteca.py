@@ -47,6 +47,36 @@ _CANON = [
         "dominio": "cuerpo_energetico",
         "archivo": "biblioteca/cuerpo_energetico/MAPA_CUERPO.md",
     },
+    {
+        "titulo": "Substrato Mineral — Chakra Raíz del Bosque",
+        "slug": "substrato-mineral-chakra-raiz",
+        "dominio": "mineral",
+        "archivo": "biblioteca/minerales/SUBSTRATO_MINERAL.md",
+    },
+    {
+        "titulo": "Seres del Bosque — Catálogo Mundial",
+        "slug": "seres-del-bosque-catalogo-mundial",
+        "dominio": "seres_magicos",
+        "archivo": "biblioteca/seres_magicos/SERES_DEL_BOSQUE.md",
+    },
+    {
+        "titulo": "Árboles y Deidades — Red de Resonancias",
+        "slug": "arboles-y-deidades-resonancias",
+        "dominio": "arboles",
+        "archivo": "biblioteca/arboles/ARBOLES_Y_DEIDADES.md",
+    },
+    {
+        "titulo": "El Vacío Primordial — Inicio de los Tiempos",
+        "slug": "vacio-primordial-inicio-de-los-tiempos",
+        "dominio": "cosmologia",
+        "archivo": "biblioteca/cosmologia/VACIO_PRIMORDIAL.md",
+    },
+    {
+        "titulo": "Catálogo de Deidades Egipcias",
+        "slug": "catalogo-deidades-egipcias",
+        "dominio": "deidades",
+        "archivo": "biblioteca/deidades/DEIDADES_EGIPCIAS.md",
+    },
 ]
 
 

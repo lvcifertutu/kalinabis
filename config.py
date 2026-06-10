@@ -7,7 +7,7 @@ from typing import ClassVar
 class Config:
     GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
-    GROQ_MAX_TOKENS: int = int(os.environ.get("GROQ_MAX_TOKENS", "300"))
+    GROQ_MAX_TOKENS: int = int(os.environ.get("GROQ_MAX_TOKENS", "800"))
     GROQ_TEMPERATURE: float = float(os.environ.get("GROQ_TEMPERATURE", "0.8"))
 
     DECAY_LETARGO_DIAS: int = 14

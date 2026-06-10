@@ -4,19 +4,48 @@ Reúne en un solo lugar la composición que antes se repetía en servidor.py:
 base de la entidad + luna + rueda + carta natal + instrucciones específicas.
 """
 
-from grimorio_base import DEIDADES, TUTU_SYSTEM, RUEDA_COMO_CONTEXTO
+from grimorio_base import DEIDADES, TUTU_SYSTEM, RUEDA_COMO_CONTEXTO, GrimorioMotor
 from luna import luna_como_contexto
 from astral import carta_natal_como_contexto
 
 
 # Dominio temático de cada deidad (para filtrar biblioteca)
 _DOMINIOS_DEIDAD: dict[str, list[str]] = {
-    "isis":     ["alquimia", "taoismo", "cuerpo_energetico", "magia"],
-    "afrodita": ["cuerpo_energetico", "tantra", "relaciones"],
-    "lilith":   ["sombra", "magia_caos", "qliphoth"],
-    "artemisa": ["artemisa_energia_planetaria", "taoismo", "cuerpo_energetico"],
-    "tutu":     ["magia_caos", "lenguaje", "caos"],
+    "isis":     ["alquimia", "taoismo", "cuerpo_energetico", "magia", "mineral", "arboles"],
+    "afrodita": ["cuerpo_energetico", "tantra", "relaciones", "seres_magicos", "arboles"],
+    "lilith":   ["sombra", "magia_caos", "qliphoth", "seres_magicos", "arboles"],
+    "artemisa": ["artemisa_energia_planetaria", "taoismo", "cuerpo_energetico", "mineral", "seres_magicos", "arboles"],
+    "tutu":     ["magia_caos", "lenguaje", "caos", "seres_magicos", "mineral", "arboles"],
 }
+
+
+def ayni_como_contexto(balance: int, n_deudas: int) -> str:
+    """Fragmento de balance ayni para el system prompt de las entidades.
+
+    Solo se añade cuando el balance es negativo — las entidades no lo mencionan
+    cuando el practicante está en equilibrio o en crédito.
+    """
+    if balance > -1:
+        return ""
+    if balance <= -3:
+        intensidad = (
+            f"El practicante carga una deuda de ayni significativa "
+            f"(balance {balance:+d}, {n_deudas} petición(es) sin retribuir). "
+            f"Nómbrala con naturalidad en algún momento de tu respuesta — "
+            f"no como reproche sino como observación de lo que el flujo pide. "
+            f"Sugiere un tipo de ofrenda si el momento es adecuado."
+        )
+    else:
+        intensidad = (
+            f"El practicante tiene una deuda de ayni leve "
+            f"(balance {balance:+d}). Puedes mencionarla brevemente si viene al caso, "
+            f"sin insistir."
+        )
+    return (
+        "\n\n═══ BALANCE AYNI ═══\n"
+        f"{intensidad}\n"
+        "═══════════════════\n"
+    )
 
 
 def bosque_como_contexto(esferas_emergentes: list[dict]) -> str:
@@ -64,6 +93,34 @@ def biblioteca_como_contexto(entradas: list[dict]) -> str:
         "Conocimiento verificado relacionado con esta consulta:\n"
         f"{contenido}\n"
         "════════════════════════════\n"
+    )
+
+
+def constelaciones_como_contexto(constelaciones: list[dict]) -> str:
+    """Fragmento de las constelaciones del mago para incluir en el prompt.
+
+    No expone el contenido de las entradas — expone la mente del mago:
+    cómo agrupó, qué nombre eligió, qué criterio articuló.
+    Tutu y las deidades pueden preguntar desde ahí.
+    """
+    if not constelaciones:
+        return ""
+    lineas = []
+    for c in constelaciones[:5]:
+        nombre = c["nombre"]
+        criterio = (c.get("criterio") or "").strip()
+        total = c.get("total_entradas", 0)
+        linea = f"  · «{nombre}» ({total} entradas)"
+        if criterio:
+            linea += f" — criterio del mago: {criterio[:150]}"
+        lineas.append(linea)
+    contenido = "\n".join(lineas)
+    return (
+        "\n\n═══ CONSTELACIONES DEL MAGO ═══\n"
+        "El practicante ha organizado la biblioteca según sus propios criterios:\n"
+        f"{contenido}\n"
+        "Estas agrupaciones revelan su manera de ver — puedes preguntar desde ahí.\n"
+        "═══════════════════════════════\n"
     )
 
 # Instrucciones específicas preservadas tal cual desde servidor.py.
@@ -212,8 +269,12 @@ class ContextoManager:
     @staticmethod
     def para_deidad(nombre: str, carta_natal: dict | None = None,
                     esferas_bosque: list[dict] | None = None,
-                    entradas_biblioteca: list[dict] | None = None) -> str:
-        """Conversación normal con una deidad: base + luna + rueda + carta + bosque + biblioteca."""
+                    entradas_biblioteca: list[dict] | None = None,
+                    constelaciones: list[dict] | None = None,
+                    balance_ayni: int = 0,
+                    n_deudas_ayni: int = 0,
+                    grimorio_mago: dict | None = None) -> str:
+        """Conversación normal con una deidad: base + luna + rueda + carta + grimorio + bosque + biblioteca + constelaciones + ayni."""
         system = (
             DEIDADES[nombre]["system_prompt"]
             + luna_como_contexto()
@@ -221,18 +282,34 @@ class ContextoManager:
         )
         if carta_natal:
             system += carta_natal_como_contexto(carta_natal)
+        relacion = GrimorioMotor.contexto_relacion_con_deidad(nombre, grimorio_mago)
+        if relacion:
+            system += relacion
         if esferas_bosque:
             system += bosque_como_contexto(esferas_bosque)
         if entradas_biblioteca:
             system += biblioteca_como_contexto(entradas_biblioteca)
+        if constelaciones:
+            system += constelaciones_como_contexto(constelaciones)
+        system += ayni_como_contexto(balance_ayni, n_deudas_ayni)
         return system
 
     @staticmethod
-    def para_tutu(esferas_bosque: list[dict] | None = None) -> str:
-        """Conversación con Tutu: base + luna + rueda + bosque."""
+    def para_tutu(esferas_bosque: list[dict] | None = None,
+                  constelaciones: list[dict] | None = None,
+                  balance_ayni: int = 0,
+                  n_deudas_ayni: int = 0,
+                  grimorio_mago: dict | None = None) -> str:
+        """Conversación con Tutu: base + luna + rueda + grimorio + bosque + constelaciones + ayni."""
         system = TUTU_SYSTEM + luna_como_contexto() + RUEDA_COMO_CONTEXTO
+        contexto_mago = GrimorioMotor.contexto_mago(grimorio_mago)
+        if contexto_mago:
+            system += contexto_mago
         if esferas_bosque:
             system += bosque_como_contexto(esferas_bosque)
+        if constelaciones:
+            system += constelaciones_como_contexto(constelaciones)
+        system += ayni_como_contexto(balance_ayni, n_deudas_ayni)
         return system
 
     @staticmethod

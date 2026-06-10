@@ -1,0 +1,500 @@
+/**
+ * KALINABIS — Typography & Design System
+ *
+ * Fuentes, espaciado, colores, temas adaptados a 8 deidades
+ * Base: serif elegante (display) + serif clásica (body)
+ */
+
+/* ========================================================================== */
+/* FONT IMPORTS */
+/* ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=Share+Tech+Mono&family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap');
+
+/* ========================================================================== */
+/* ROOT VARIABLES — Global & Adaptive */
+/* ========================================================================== */
+
+:root {
+  /* === TYPOGRAPHY === */
+  --font-serif-display: 'EB Garamond', Georgia, serif;
+  --font-serif-body: 'Crimson Text', Georgia, serif;
+  --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+  --font-sacred: 'Cinzel', 'EB Garamond', serif;
+  --font-term: 'Share Tech Mono', 'SF Mono', monospace;
+
+  /* === SIZES === */
+  --font-size-xs: 0.75rem;   /* 12px */
+  --font-size-sm: 0.875rem;  /* 14px */
+  --font-size-base: 1rem;    /* 16px */
+  --font-size-lg: 1.25rem;   /* 20px */
+  --font-size-xl: 1.5rem;    /* 24px */
+  --font-size-2xl: 2rem;     /* 32px */
+  --font-size-3xl: 2.5rem;   /* 40px */
+  --font-size-4xl: 3rem;     /* 48px */
+  --font-size-5xl: 3.5rem;   /* 56px */
+
+  /* === LINE HEIGHTS === */
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.6;
+  --line-height-relaxed: 1.8;
+
+  /* === SPACING === */
+  --space-px: 1px;
+  --space-0-5: 0.125rem;   /* 2px */
+  --space-1: 0.25rem;      /* 4px */
+  --space-2: 0.5rem;       /* 8px */
+  --space-3: 0.75rem;      /* 12px */
+  --space-4: 1rem;         /* 16px */
+  --space-6: 1.5rem;       /* 24px */
+  --space-8: 2rem;         /* 32px */
+  --space-10: 2.5rem;      /* 40px */
+  --space-12: 3rem;        /* 48px */
+
+  /* === COLORS — NEUTRAL PALETTE === */
+  --color-white: #FFFFFF;
+  --color-off-white: #F5F1E8;
+  --color-gray-100: #E5E5E5;
+  --color-gray-200: #C0C0C0;
+  --color-gray-400: #808080;
+  --color-gray-700: #333333;
+  --color-black: #000000;
+  --color-black-deep: #0A0E27;
+
+  /* === DEITIES PALETTES === */
+  /* LILITH — Sombra y Poder */
+  --color-lilith-primary: #CC0000;
+  --color-lilith-secondary: #4B0082;
+  --color-lilith-accent: #FF1493;
+  --color-lilith-bg: #1A0000;
+
+  /* ARTEMISA — Caza y Protección */
+  --color-artemisa-primary: #E8E8E8;
+  --color-artemisa-secondary: #87CEEB;
+  --color-artemisa-accent: #C0C0C0;
+  --color-artemisa-bg: #1A2633;
+
+  /* AFRODITA — Magnetismo */
+  --color-afrodita-primary: #FFD700;
+  --color-afrodita-secondary: #FF69B4;
+  --color-afrodita-accent: #FFA500;
+  --color-afrodita-bg: #2D1B69;
+
+  /* ISIS — Magia Antigua */
+  --color-isis-primary: #00CED1;
+  --color-isis-secondary: #FFD700;
+  --color-isis-accent: #4169E1;
+  --color-isis-bg: #001B4D;
+
+  /* LIBRARY */
+  --color-library-bg: #F5F1E8;
+  --color-library-text: #2C1810;
+  --color-library-accent: #C89D5C;
+
+  /* FOREST */
+  --color-forest-bg: #1A4D2E;
+  --color-forest-text: #E8F5E9;
+  --color-forest-accent: #2D6A4F;
+
+  /* === EFFECTS === */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.2);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.3);
+
+  --blur-sm: blur(2px);
+  --blur-md: blur(4px);
+  --blur-lg: blur(8px);
+
+  /* === TIME OF DAY ADJUSTMENT === */
+  --time-of-day: 18; /* 0-23, adjusts light warmth */
+  --moon-phase: 0.5; /* 0-1, adjusts ambient brightness */
+
+  /* === ANIMATION === */
+  --duration-fast: 150ms;
+  --duration-normal: 300ms;
+  --duration-slow: 500ms;
+  --duration-slower: 1000ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-expo: cubic-bezier(0.95, 0.05, 0.795, 0.035);
+  --ease-out-cubic: cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+/* ========================================================================== */
+/* DARK MODE (Default for Kalinabis) */
+/* ========================================================================== */
+
+body {
+  background-color: var(--color-black-deep);
+  color: var(--color-white);
+  font-family: var(--font-serif-body);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  letter-spacing: 0.02em;
+}
+
+/* ========================================================================== */
+/* TYPOGRAPHY STYLES */
+/* ========================================================================== */
+
+/* Display Headings (Serif dramatic, for emphasis) */
+h1,
+.h1 {
+  font-family: var(--font-serif-display);
+  font-size: var(--font-size-5xl);
+  font-weight: 400;
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  margin: var(--space-4) 0;
+}
+
+h2,
+.h2 {
+  font-family: var(--font-serif-display);
+  font-size: var(--font-size-4xl);
+  font-weight: 400;
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.01em;
+  margin: var(--space-4) 0;
+}
+
+h3,
+.h3 {
+  font-family: var(--font-serif-display);
+  font-size: var(--font-size-3xl);
+  font-weight: 400;
+  line-height: var(--line-height-tight);
+  margin: var(--space-3) 0;
+}
+
+h4,
+.h4 {
+  font-family: var(--font-serif-display);
+  font-size: var(--font-size-2xl);
+  font-weight: 400;
+  margin: var(--space-3) 0;
+}
+
+h5,
+.h5 {
+  font-family: var(--font-serif-body);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: var(--space-2) 0;
+}
+
+/* Body text */
+p {
+  margin: var(--space-4) 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.text-sm {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.text-xs {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-tight);
+}
+
+/* Emphasis */
+strong,
+.font-bold {
+  font-weight: 600;
+}
+
+em,
+.italic {
+  font-style: italic;
+}
+
+.uppercase {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tracking-wide {
+  letter-spacing: 0.1em;
+}
+
+/* ========================================================================== */
+/* DEITY-SPECIFIC STYLES */
+/* ========================================================================== */
+
+/* LILITH */
+.deity-lilith {
+  --primary: var(--color-lilith-primary);
+  --secondary: var(--color-lilith-secondary);
+  --accent: var(--color-lilith-accent);
+  background-color: var(--color-lilith-bg);
+}
+
+.deity-lilith h1,
+.deity-lilith h2,
+.deity-lilith h3 {
+  color: var(--color-lilith-accent);
+  text-shadow: 0 0 10px rgba(255, 20, 147, 0.3);
+}
+
+.deity-lilith .text-accent {
+  color: var(--color-lilith-accent);
+}
+
+/* ARTEMISA */
+.deity-artemisa {
+  --primary: var(--color-artemisa-primary);
+  --secondary: var(--color-artemisa-secondary);
+  --accent: var(--color-artemisa-accent);
+  background-color: var(--color-artemisa-bg);
+}
+
+.deity-artemisa h1,
+.deity-artemisa h2,
+.deity-artemisa h3 {
+  color: var(--color-artemisa-primary);
+  text-shadow: 0 0 15px rgba(135, 206, 235, 0.2);
+}
+
+/* AFRODITA */
+.deity-afrodita {
+  --primary: var(--color-afrodita-primary);
+  --secondary: var(--color-afrodita-secondary);
+  --accent: var(--color-afrodita-accent);
+  background-color: var(--color-afrodita-bg);
+}
+
+.deity-afrodita h1,
+.deity-afrodita h2,
+.deity-afrodita h3 {
+  color: var(--color-afrodita-secondary);
+  text-shadow: 0 0 15px rgba(255, 105, 180, 0.3);
+}
+
+/* ISIS */
+.deity-isis {
+  --primary: var(--color-isis-primary);
+  --secondary: var(--color-isis-secondary);
+  --accent: var(--color-isis-accent);
+  background-color: var(--color-isis-bg);
+}
+
+.deity-isis h1,
+.deity-isis h2,
+.deity-isis h3 {
+  color: var(--color-isis-primary);
+  text-shadow: 0 0 15px rgba(0, 206, 209, 0.2);
+}
+
+/* ========================================================================== */
+/* BUTTONS & INTERACTIONS */
+/* ========================================================================== */
+
+button,
+.btn {
+  font-family: var(--font-serif-display);
+  font-size: var(--font-size-lg);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: var(--space-3) var(--space-6);
+  border: 2px solid currentColor;
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-out-cubic);
+  position: relative;
+  overflow: hidden;
+}
+
+button:hover,
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+button:active,
+.btn:active {
+  transform: translateY(0);
+}
+
+/* ========================================================================== */
+/* CARDS & CONTAINERS */
+/* ========================================================================== */
+
+.card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  padding: var(--space-6);
+  backdrop-filter: var(--blur-sm);
+  background: rgba(0, 0, 0, 0.3);
+  transition: all var(--duration-normal) var(--ease-out-cubic);
+}
+
+.card:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.card-glass {
+  backdrop-filter: var(--blur-md);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ========================================================================== */
+/* ANIMATIONS */
+/* ========================================================================== */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUpFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn var(--duration-normal) var(--ease-out-cubic);
+}
+
+.animate-slide-up {
+  animation: slideUpFadeIn var(--duration-slow) var(--ease-out-cubic);
+}
+
+.animate-glow {
+  animation: glow-pulse var(--duration-slower) ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-breathe {
+  animation: breathe 2s ease-in-out infinite;
+}
+
+/* Stagger animation delays */
+.animate-delay-100 {
+  animation-delay: 100ms;
+}
+
+.animate-delay-200 {
+  animation-delay: 200ms;
+}
+
+.animate-delay-300 {
+  animation-delay: 300ms;
+}
+
+/* ========================================================================== */
+/* UTILITY CLASSES */
+/* ========================================================================== */
+
+.text-accent {
+  color: var(--color-library-accent);
+}
+
+.text-muted {
+  color: var(--color-gray-400);
+  opacity: 0.7;
+}
+
+.opacity-low {
+  opacity: 0.4;
+}
+
+.opacity-medium {
+  opacity: 0.6;
+}
+
+/* Gradient text (for Lilith, Afrodita, etc.) */
+.text-gradient {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ========================================================================== */
+/* RESPONSIVE */
+/* ========================================================================== */
+
+@media (max-width: 768px) {
+  h1,
+  .h1 {
+    font-size: var(--font-size-3xl);
+  }
+
+  h2,
+  .h2 {
+    font-size: var(--font-size-2xl);
+  }
+
+  h3,
+  .h3 {
+    font-size: var(--font-size-xl);
+  }
+
+  button,
+  .btn {
+    font-size: var(--font-size-base);
+    padding: var(--space-2) var(--space-4);
+  }
+}
+
+/* ========================================================================== */
+/* PRINT */
+/* ========================================================================== */
+
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+
+  .no-print {
+    display: none;
+  }
+}

@@ -169,13 +169,18 @@ from grimorio_base import (
     INVOCACIONES_DIRECTAS, sembrar_memoria_artemisa,
     CHAKRAS, ARBOL_VIDA_SEPHIROTH, ARBOL_MUERTE_QLIPHOTH,
     CHAKRAS_ARTEMISA_SOCIAL, RUEDA_COLORES,
+    GrimorioMotor,
 )
 from base_datos.schema   import inicializar_db
 from base_datos.proyecto import ProyectoRepo, ConversacionRepo
 from base_datos.esferas  import EsferaRepo
 from base_datos.practicas import ServitorRepo, SyncRepo, ParadigmaRepo
 from base_datos.usuario  import UsuarioRepo, ExpRepo, LogroRepo
-from base_datos.grimorio import GrimorioRepo, SigiloRepo
+from base_datos.grimorio import (
+    GrimorioRepo, SigiloRepo,
+    EsferaGrimorioRepo, ReliquiaRepo,
+    ARQUETIPOS, ELEMENTOS, CHAKRAS_VALIDOS, SEPHIROTH_VALIDOS,
+)
 from base_datos.legacy import (
     DecisionRepo, GrimorioLegadoRepo, SigiloLegadoRepo,
     CartaNatalRepo, estadisticas,
@@ -215,7 +220,10 @@ from invocacion import invocador
 # Identidad de proyecto encapsulada (header, cifrado, proyecto-vs-legacy).
 from proyecto_contexto import ContextoProyecto
 
-from base_datos.biblioteca import EntradaRepo, FuenteRepo, ContribucionRepo, ResonanciaRepo
+from base_datos.biblioteca import (
+    EntradaRepo, FuenteRepo, ContribucionRepo, ResonanciaRepo,
+    ConstelacionRepo, COLORES_CONSTELACION,
+)
 from biblioteca import (
     sembrar_canon, obtener_entrada_completa,
     validar_nueva_entrada, validar_fuente,
@@ -444,11 +452,14 @@ def _tutu_decide(mensaje: str):
 def _contexto_vivo(
     nombre_deidad: str,
     proyecto_hash: str | None = None,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], list[dict], dict | None]:
     """Obtiene el estado del bosque y fragmentos de biblioteca para una deidad.
 
     Si proyecto_hash está presente, enriquece las esferas emergentes con las
-    ofrendas de las esferas que este mago visitó recientemente.
+    ofrendas de las esferas que este mago visitó recientemente, y carga el
+    grimorio personal del mago para personalizar el sistema de invocación.
+
+    Retorna (emergentes, entradas_biblioteca, constelaciones, grimorio_mago).
     """
     from invocacion.contexto import ContextoManager
     try:
@@ -483,24 +494,44 @@ def _contexto_vivo(
         entradas = sorted(entradas, key=lambda x: -x.get("resonancia", 0))[:2]
     except Exception:
         entradas = []
-    return emergentes, entradas
+
+    constelaciones = []
+    if proyecto_hash:
+        try:
+            from base_datos.biblioteca import ConstelacionRepo as _ConRepo
+            constelaciones = _ConRepo.listar(proyecto_hash)
+        except Exception:
+            pass
+
+    grimorio_mago = None
+    if proyecto_hash:
+        try:
+            grimorio_mago = EsferaGrimorioRepo.obtener(proyecto_hash)
+        except Exception:
+            pass
+
+    return emergentes, entradas, constelaciones, grimorio_mago
 
 
 def _invocar_deidad(nombre: str, mensaje: str, proyecto: Proyecto) -> str:
     if nombre not in DEIDADES:
         return f"Entidad desconocida: {nombre}"
-    esferas, entradas = _contexto_vivo(nombre, proyecto_hash=proyecto.hash)
+    esferas, entradas, constelaciones, grimorio_mago = _contexto_vivo(nombre, proyecto_hash=proyecto.hash)
     return invocador.invocar_deidad(
         nombre, mensaje, proyecto,
         esferas_bosque=esferas or None,
         entradas_biblioteca=entradas or None,
+        constelaciones=constelaciones or None,
+        grimorio_mago=grimorio_mago,
     ).texto
 
 
 def _invocar_tutu(mensaje: str, proyecto: Proyecto) -> str:
-    esferas, _ = _contexto_vivo("tutu", proyecto_hash=proyecto.hash)
+    esferas, _, constelaciones, grimorio_mago = _contexto_vivo("tutu", proyecto_hash=proyecto.hash)
     return invocador.invocar_tutu(mensaje, proyecto,
-                                   esferas_bosque=esferas or None).texto
+                                   esferas_bosque=esferas or None,
+                                   constelaciones=constelaciones or None,
+                                   grimorio_mago=grimorio_mago).texto
 
 
 def _procesar_comando(mensaje: str, proyecto: Proyecto) -> tuple[dict, int]:
@@ -1333,6 +1364,101 @@ def post_regalo_sigilo(entidad):
     memoria = ctx.cargar_memoria(entidad)
     intencion = invocador.generar_intencion_sigilo(entidad, memoria)
     return jsonify({"intencion": intencion, "entidad": entidad})
+
+
+@app.route("/api/ayni/resumen", methods=["GET"])
+def get_ayni_resumen():
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Proyecto requerido"}), 401
+    from base_datos.ayni import AyniRepo
+    resumen = AyniRepo.resumen(ctx.hash)
+    deudas = AyniRepo.deudas_abiertas(ctx.hash)
+    ofrendas = AyniRepo.historial_ofrendas(ctx.hash, limite=10)
+    return jsonify({
+        "balance": resumen["balance"],
+        "n_deudas_abiertas": resumen["n_deudas_abiertas"],
+        "notable": resumen["notable"],
+        "deudas": deudas,
+        "ofrendas_recientes": ofrendas,
+    })
+
+
+@app.route("/api/ayni/ofrenda", methods=["POST"])
+@_limitar_request()
+def post_ayni_ofrenda():
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Proyecto requerido"}), 401
+    from base_datos.ayni import AyniRepo, TIPOS_OFRENDA
+    d = request.json or {}
+    tipo = d.get("tipo", "").strip()
+    descripcion = d.get("descripcion", "").strip()
+    deuda_id = d.get("deuda_id")
+    if tipo not in TIPOS_OFRENDA:
+        return jsonify({"error": f"Tipo inválido. Válidos: {', '.join(TIPOS_OFRENDA)}"}), 400
+    if not descripcion:
+        return jsonify({"error": "Descripción requerida"}), 400
+    ofrenda = AyniRepo.registrar_ofrenda(
+        ctx.hash, tipo, descripcion, deuda_id=deuda_id
+    )
+    return jsonify({"ok": True, "ofrenda": ofrenda})
+
+
+@app.route("/api/manifestar", methods=["POST"])
+@_limitar_request()
+def post_manifestar():
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Proyecto requerido"}), 401
+    from base_datos.manifestacion import ManifestacionRepo
+    d = request.json or {}
+    tipo = d.get("tipo", "").strip()
+    intencion = d.get("intencion", "").strip()
+    entidad_testigo = d.get("entidad_testigo", "").strip()
+    TIPOS_VALIDOS = ("peticion", "decreto", "transmutacion")
+    if tipo not in TIPOS_VALIDOS:
+        return jsonify({"error": f"Tipo inválido. Válidos: {', '.join(TIPOS_VALIDOS)}"}), 400
+    if not intencion:
+        return jsonify({"error": "Intención requerida"}), 400
+    if not entidad_testigo:
+        return jsonify({"error": "Entidad testigo requerida"}), 400
+    m_id = ManifestacionRepo.crear(ctx.hash, tipo, intencion, entidad_testigo)
+    return jsonify({"ok": True, "id": m_id}), 201
+
+
+@app.route("/api/manifestar", methods=["GET"])
+def get_manifestaciones():
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Proyecto requerido"}), 401
+    from base_datos.manifestacion import ManifestacionRepo
+    estado = request.args.get("estado")
+    manifestaciones = ManifestacionRepo.listar(ctx.hash, estado=estado or None)
+    return jsonify({"manifestaciones": manifestaciones})
+
+
+@app.route("/api/manifestar/<int:m_id>/checkin", methods=["POST"])
+@_limitar_request()
+def post_checkin(m_id: int):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Proyecto requerido"}), 401
+    from base_datos.manifestacion import ManifestacionRepo, CheckinRepo
+    m = ManifestacionRepo.por_id(m_id)
+    if not m or m["proyecto_hash"] != ctx.hash:
+        return jsonify({"error": "Manifestación no encontrada"}), 404
+    d = request.json or {}
+    t_dias = d.get("t_dias")
+    observacion = d.get("observacion", "").strip()
+    estado_resultado = d.get("estado_resultado", "").strip()
+    ESTADOS_VALIDOS = ("pendiente", "parcial", "cumplida", "no_cumplida")
+    if t_dias not in (7, 30, 90):
+        return jsonify({"error": "t_dias debe ser 7, 30 o 90"}), 400
+    if estado_resultado not in ESTADOS_VALIDOS:
+        return jsonify({"error": f"Estado inválido. Válidos: {', '.join(ESTADOS_VALIDOS)}"}), 400
+    CheckinRepo.registrar(m_id, t_dias, observacion, estado_resultado)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/astral/ciudades", methods=["GET"])
@@ -3067,6 +3193,298 @@ def bib_contribuciones(slug: str):
         return jsonify({"error": "Entrada no encontrada"}), 404
     pendientes = ContribucionRepo.listar_pendientes(entrada["id"])
     return jsonify({"contribuciones": pendientes}), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  BIBLIOTECA — CONSTELACIONES PERSONALES
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MAX_NOMBRE_CONSTELACION = 120
+_MAX_DESC_CONSTELACION   = 2000
+_MAX_CRITERIO            = 2000
+_MAX_NOTA_ENTRADA        = 1000
+
+
+def _validar_constelacion(data: dict) -> str | None:
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        return "nombre es requerido"
+    if len(nombre) > _MAX_NOMBRE_CONSTELACION:
+        return f"nombre excede {_MAX_NOMBRE_CONSTELACION} caracteres"
+    if len(data.get("descripcion") or "") > _MAX_DESC_CONSTELACION:
+        return f"descripcion excede {_MAX_DESC_CONSTELACION} caracteres"
+    if len(data.get("criterio") or "") > _MAX_CRITERIO:
+        return f"criterio excede {_MAX_CRITERIO} caracteres"
+    color = data.get("color") or "indigo"
+    if color not in COLORES_CONSTELACION:
+        return f"color inválido. Opciones: {', '.join(sorted(COLORES_CONSTELACION))}"
+    return None
+
+
+@app.route("/api/biblioteca/constelaciones", methods=["GET"])
+@_limitar_request()
+def bib_constelaciones_listar():
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code"}), 401
+    constelaciones = ConstelacionRepo.listar(ctx.hash)
+    return jsonify({"constelaciones": constelaciones}), 200
+
+
+@app.route("/api/biblioteca/constelaciones", methods=["POST"])
+@_limitar_request()
+def bib_constelaciones_crear():
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code"}), 401
+
+    data = request.get_json(silent=True) or {}
+    error = _validar_constelacion(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    constelacion = ConstelacionRepo.crear(
+        nombre=data["nombre"].strip(),
+        hash_proyecto=ctx.hash,
+        descripcion=(data.get("descripcion") or "").strip() or None,
+        criterio=(data.get("criterio") or "").strip() or None,
+        color=data.get("color") or "indigo",
+    )
+    return jsonify(constelacion), 201
+
+
+@app.route("/api/biblioteca/constelaciones/<int:cid>", methods=["GET"])
+@_limitar_request()
+def bib_constelaciones_obtener(cid: int):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code"}), 401
+    constelacion = ConstelacionRepo.obtener(cid, ctx.hash)
+    if not constelacion:
+        return jsonify({"error": "Constelación no encontrada"}), 404
+    return jsonify(constelacion), 200
+
+
+@app.route("/api/biblioteca/constelaciones/<int:cid>", methods=["PUT"])
+@_limitar_request()
+def bib_constelaciones_actualizar(cid: int):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code"}), 401
+
+    data = request.get_json(silent=True) or {}
+    nombre = (data.get("nombre") or "").strip() or None
+    if nombre and len(nombre) > _MAX_NOMBRE_CONSTELACION:
+        return jsonify({"error": f"nombre excede {_MAX_NOMBRE_CONSTELACION} caracteres"}), 400
+
+    constelacion = ConstelacionRepo.actualizar(
+        constelacion_id=cid,
+        hash_proyecto=ctx.hash,
+        nombre=nombre,
+        descripcion=(data.get("descripcion") or "").strip() or None,
+        criterio=(data.get("criterio") or "").strip() or None,
+        color=data.get("color") or None,
+    )
+    if not constelacion:
+        return jsonify({"error": "Constelación no encontrada"}), 404
+    return jsonify(constelacion), 200
+
+
+@app.route("/api/biblioteca/constelaciones/<int:cid>", methods=["DELETE"])
+@_limitar_request()
+def bib_constelaciones_eliminar(cid: int):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code"}), 401
+    eliminada = ConstelacionRepo.eliminar(cid, ctx.hash)
+    if not eliminada:
+        return jsonify({"error": "Constelación no encontrada"}), 404
+    return jsonify({"eliminada": True}), 200
+
+
+@app.route("/api/biblioteca/constelaciones/<int:cid>/entradas", methods=["POST"])
+@_limitar_request()
+def bib_constelaciones_agregar_entrada(cid: int):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code"}), 401
+
+    data = request.get_json(silent=True) or {}
+    slug = (data.get("slug") or "").strip()
+    if not slug:
+        return jsonify({"error": "slug de la entrada es requerido"}), 400
+
+    entrada = EntradaRepo.por_slug(slug)
+    if not entrada:
+        return jsonify({"error": "Entrada no encontrada"}), 404
+
+    nota = (data.get("nota") or "").strip() or None
+    if nota and len(nota) > _MAX_NOTA_ENTRADA:
+        return jsonify({"error": f"nota excede {_MAX_NOTA_ENTRADA} caracteres"}), 400
+
+    try:
+        orden = int(data.get("orden", 0))
+    except (TypeError, ValueError):
+        orden = 0
+
+    pivot = ConstelacionRepo.agregar_entrada(
+        constelacion_id=cid,
+        entrada_id=entrada["id"],
+        hash_proyecto=ctx.hash,
+        nota=nota,
+        orden=orden,
+    )
+    if not pivot:
+        return jsonify({"error": "Constelación no encontrada"}), 404
+    return jsonify(pivot), 201
+
+
+@app.route(
+    "/api/biblioteca/constelaciones/<int:cid>/entradas/<int:entrada_id>",
+    methods=["DELETE"],
+)
+@_limitar_request()
+def bib_constelaciones_quitar_entrada(cid: int, entrada_id: int):
+    ctx = _contexto()
+    if not ctx.activo:
+        return jsonify({"error": "Se requiere X-Project-Code"}), 401
+    quitada = ConstelacionRepo.quitar_entrada(cid, entrada_id, ctx.hash)
+    if not quitada:
+        return jsonify({"error": "Constelación o entrada no encontrada"}), 404
+    return jsonify({"quitada": True}), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ESFERA GRIMORIO — Configuración cosmológica personal del mago
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MAX_NOMBRE_MAGO    = 80
+_MAX_INTENCION_ESFERA = 1000
+_MAX_CTX_DEIDAD     = 500
+_MAX_NOMBRE_RELIQUIA = 120
+_MAX_DESC_RELIQUIA   = 500
+
+
+def _validar_grimorio(data: dict) -> str | None:
+    nombre = (data.get("nombre_mago") or "").strip()
+    if nombre and len(nombre) > _MAX_NOMBRE_MAGO:
+        return f"nombre_mago excede {_MAX_NOMBRE_MAGO} caracteres"
+    intencion = (data.get("intencion") or "").strip()
+    if intencion and len(intencion) > _MAX_INTENCION_ESFERA:
+        return f"intencion excede {_MAX_INTENCION_ESFERA} caracteres"
+    arquetipo = data.get("arquetipo")
+    if arquetipo and arquetipo not in ARQUETIPOS:
+        return f"arquetipo inválido — válidos: {', '.join(sorted(ARQUETIPOS))}"
+    elemento = data.get("elemento")
+    if elemento and elemento not in ELEMENTOS:
+        return f"elemento inválido — válidos: {', '.join(sorted(ELEMENTOS))}"
+    chakra = data.get("chakra_activo")
+    if chakra and chakra not in CHAKRAS_VALIDOS:
+        return f"chakra_activo inválido"
+    sephira = data.get("sephira_trabajo")
+    if sephira and sephira not in SEPHIROTH_VALIDOS:
+        return f"sephira_trabajo inválido"
+    for attr in ("nivel_voluntad", "nivel_intuicion", "nivel_sombra", "nivel_manifestacion"):
+        v = data.get(attr)
+        if v is not None and not (isinstance(v, int) and 1 <= v <= 10):
+            return f"{attr} debe ser entero entre 1 y 10"
+    return None
+
+
+@app.route("/api/mago/grimorio", methods=["GET"])
+@_limitar_request()
+@_contexto()
+@_proyecto_requerido
+def mago_grimorio_get(proyecto):
+    g = EsferaGrimorioRepo.obtener_o_crear(proyecto.hash)
+    return jsonify(g)
+
+
+@app.route("/api/mago/grimorio", methods=["PUT"])
+@_limitar_request()
+@_contexto()
+@_proyecto_requerido
+def mago_grimorio_put(proyecto):
+    data = request.get_json(force=True) or {}
+    if err := _validar_grimorio(data):
+        return jsonify({"error": err}), 400
+    campos = {k: data[k] for k in (
+        "nombre_mago", "intencion", "arquetipo", "elemento",
+        "chakra_activo", "sephira_trabajo",
+        "nivel_voluntad", "nivel_intuicion",
+        "nivel_sombra", "nivel_manifestacion",
+        "fecha_nacimiento", "lugar_nacimiento",
+        "lat_nacimiento", "lon_nacimiento",
+    ) if k in data}
+    g = EsferaGrimorioRepo.actualizar(proyecto.hash, **campos)
+    return jsonify(g)
+
+
+@app.route("/api/mago/grimorio/deidades", methods=["POST"])
+@_limitar_request()
+@_contexto()
+@_proyecto_requerido
+def mago_grimorio_agregar_deidad(proyecto):
+    data = request.get_json(force=True) or {}
+    nombre_entidad = (data.get("nombre_entidad") or "").strip().lower()
+    if not nombre_entidad:
+        return jsonify({"error": "nombre_entidad es requerido"}), 400
+    ctx_personal = (data.get("contexto_personal") or "").strip()
+    if len(ctx_personal) > _MAX_CTX_DEIDAD:
+        return jsonify({"error": f"contexto_personal excede {_MAX_CTX_DEIDAD} caracteres"}), 400
+    orden = data.get("orden", 0)
+    g = EsferaGrimorioRepo.agregar_deidad(
+        proyecto.hash, nombre_entidad,
+        contexto_personal=ctx_personal or None,
+        orden=orden,
+    )
+    return jsonify(g), 201
+
+
+@app.route("/api/mago/grimorio/deidades/<nombre_entidad>", methods=["DELETE"])
+@_limitar_request()
+@_contexto()
+@_proyecto_requerido
+def mago_grimorio_quitar_deidad(proyecto, nombre_entidad: str):
+    g = EsferaGrimorioRepo.quitar_deidad(proyecto.hash, nombre_entidad.lower())
+    return jsonify(g)
+
+
+@app.route("/api/mago/grimorio/reliquias", methods=["GET"])
+@_limitar_request()
+@_contexto()
+@_proyecto_requerido
+def mago_reliquias_get(proyecto):
+    reliquias = ReliquiaRepo.listar(proyecto.hash)
+    return jsonify(reliquias)
+
+
+@app.route("/api/mago/grimorio/reliquias", methods=["POST"])
+@_limitar_request()
+@_contexto()
+@_proyecto_requerido
+def mago_reliquias_crear(proyecto):
+    data = request.get_json(force=True) or {}
+    nombre = (data.get("nombre") or "").strip()
+    nombre_entidad = (data.get("nombre_entidad") or "").strip().lower()
+    if not nombre:
+        return jsonify({"error": "nombre es requerido"}), 400
+    if not nombre_entidad:
+        return jsonify({"error": "nombre_entidad es requerido"}), 400
+    if len(nombre) > _MAX_NOMBRE_RELIQUIA:
+        return jsonify({"error": f"nombre excede {_MAX_NOMBRE_RELIQUIA} caracteres"}), 400
+    desc = (data.get("descripcion") or "").strip()
+    if len(desc) > _MAX_DESC_RELIQUIA:
+        return jsonify({"error": f"descripcion excede {_MAX_DESC_RELIQUIA} caracteres"}), 400
+    portable = bool(data.get("portable", True))
+    r = ReliquiaRepo.crear(
+        hash_proyecto_origen=proyecto.hash,
+        nombre=nombre,
+        nombre_entidad=nombre_entidad,
+        descripcion=desc or None,
+        portable=portable,
+    )
+    return jsonify(r), 201
 
 
 # ═══════════════════════════════════════════════════════════════════════════

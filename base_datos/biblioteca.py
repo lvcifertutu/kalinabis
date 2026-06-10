@@ -11,7 +11,12 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Optional
 
-from base_datos._helpers import _conexion, _ph, _serial
+from base_datos._helpers import (
+    _conexion_bib as _conexion,
+    _ph_bib as _ph,
+    _serial_bib as _serial,
+    _id_ultimo_bib,
+)
 
 
 # ── Pesos de resonancia ────────────────────────────────────────────────────
@@ -33,6 +38,17 @@ ESTADOS_ENTRADA = {"semilla", "brote", "arbol", "canon", "humus"}
 
 
 # ── Schema ─────────────────────────────────────────────────────────────────
+
+def _inicializar_local():
+    """Crea las tablas de biblioteca en el adaptador local.
+
+    Solo para desarrollo sin SUPABASE_DB_URL. En producción, usar
+    migrations/biblioteca_supabase.sql directamente en Supabase.
+    """
+    pk = f"{_serial()} PRIMARY KEY"
+    with _conexion() as (con, cur):
+        _crear_tablas(cur, pk)
+
 
 def _crear_tablas(cur, pk: str):
     cur.execute(f"""
@@ -105,6 +121,41 @@ def _crear_tablas(cur, pk: str):
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_bib_reson_entrada
         ON biblioteca_resonancias (entrada_id)
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS biblioteca_constelaciones (
+            id             {pk},
+            nombre         TEXT NOT NULL,
+            descripcion    TEXT,
+            criterio       TEXT,
+            hash_proyecto  TEXT NOT NULL,
+            color          TEXT NOT NULL DEFAULT 'indigo',
+            creado_en      TEXT NOT NULL,
+            actualizado_en TEXT NOT NULL
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS biblioteca_constelacion_entradas (
+            id               {pk},
+            constelacion_id  INTEGER NOT NULL
+                                 REFERENCES biblioteca_constelaciones(id)
+                                 ON DELETE CASCADE,
+            entrada_id       INTEGER NOT NULL
+                                 REFERENCES biblioteca_entradas(id)
+                                 ON DELETE CASCADE,
+            nota             TEXT,
+            orden            INTEGER NOT NULL DEFAULT 0,
+            creado_en        TEXT NOT NULL,
+            UNIQUE (constelacion_id, entrada_id)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_bib_constel_proyecto
+        ON biblioteca_constelaciones (hash_proyecto)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_bib_constel_entradas_constel
+        ON biblioteca_constelacion_entradas (constelacion_id)
     """)
 
 
@@ -312,7 +363,7 @@ class FuenteRepo:
                 f"VALUES ({_ph(5)})",
                 (entrada_id, tipo, referencia, 0, ahora),
             )
-            fuente_id = cur.lastrowid
+            fuente_id = _id_ultimo_bib(cur)
             cur.execute(
                 "UPDATE biblioteca_entradas SET fuentes_count = fuentes_count + 1 "
                 f"WHERE id = {_ph(1)}",
@@ -367,7 +418,7 @@ class ContribucionRepo:
                 (entrada_id, tipo, contenido, "pendiente",
                  0, 0, hash_autor, ahora),
             )
-            cid = cur.lastrowid
+            cid = _id_ultimo_bib(cur)
         with _conexion() as (con, cur):
             cur.execute(
                 f"SELECT id, entrada_id, tipo, contenido, estado, "
@@ -474,3 +525,251 @@ class ResonanciaRepo:
                 {"tipo": r[0], "fecha": r[1], "slug": r[2], "titulo": r[3]}
                 for r in cur.fetchall()
             ]
+
+
+# ── ConstelacionRepo ───────────────────────────────────────────────────────
+
+def _row_to_constelacion(row) -> dict:
+    return {
+        "id":             row[0],
+        "nombre":         row[1],
+        "descripcion":    row[2],
+        "criterio":       row[3],
+        "hash_proyecto":  row[4],
+        "color":          row[5],
+        "creado_en":      row[6],
+        "actualizado_en": row[7],
+    }
+
+
+def _row_to_constelacion_entrada(row) -> dict:
+    return {
+        "id":              row[0],
+        "constelacion_id": row[1],
+        "entrada_id":      row[2],
+        "nota":            row[3],
+        "orden":           row[4],
+        "creado_en":       row[5],
+        "slug":            row[6] if len(row) > 6 else None,
+        "titulo":          row[7] if len(row) > 7 else None,
+        "dominio":         row[8] if len(row) > 8 else None,
+        "estado":          row[9] if len(row) > 9 else None,
+    }
+
+
+COLORES_CONSTELACION = {
+    "indigo", "violeta", "escarlata", "dorado", "esmeralda",
+    "obsidiana", "plata", "cobre", "azul", "rojo",
+}
+
+
+class ConstelacionRepo:
+    T  = "biblioteca_constelaciones"
+    TE = "biblioteca_constelacion_entradas"
+
+    @classmethod
+    def crear(cls, nombre: str, hash_proyecto: str,
+              descripcion: Optional[str] = None,
+              criterio: Optional[str] = None,
+              color: str = "indigo") -> dict:
+        if color not in COLORES_CONSTELACION:
+            color = "indigo"
+        ahora = datetime.now().isoformat()
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"INSERT INTO {cls.T} "
+                f"(nombre, descripcion, criterio, hash_proyecto, color, "
+                f"creado_en, actualizado_en) "
+                f"VALUES ({_ph(7)})",
+                (nombre, descripcion, criterio, hash_proyecto, color,
+                 ahora, ahora),
+            )
+            cid = _id_ultimo_bib(cur)
+        return cls._obtener_por_id(cid)
+
+    @classmethod
+    def listar(cls, hash_proyecto: str) -> list[dict]:
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"SELECT c.id, c.nombre, c.descripcion, c.criterio, "
+                f"c.hash_proyecto, c.color, c.creado_en, c.actualizado_en, "
+                f"COUNT(ce.id) AS total_entradas "
+                f"FROM {cls.T} c "
+                f"LEFT JOIN {cls.TE} ce ON ce.constelacion_id = c.id "
+                f"WHERE c.hash_proyecto = {_ph(1)} "
+                f"GROUP BY c.id "
+                f"ORDER BY c.actualizado_en DESC",
+                (hash_proyecto,),
+            )
+            rows = cur.fetchall()
+        resultado = []
+        for r in rows:
+            d = _row_to_constelacion(r)
+            d["total_entradas"] = r[8]
+            resultado.append(d)
+        return resultado
+
+    @classmethod
+    def obtener(cls, constelacion_id: int,
+                hash_proyecto: str) -> Optional[dict]:
+        constelacion = cls._obtener_por_id(constelacion_id)
+        if not constelacion or constelacion["hash_proyecto"] != hash_proyecto:
+            return None
+        constelacion["entradas"] = cls.entradas_de(constelacion_id)
+        return constelacion
+
+    @classmethod
+    def actualizar(cls, constelacion_id: int, hash_proyecto: str,
+                   nombre: Optional[str] = None,
+                   descripcion: Optional[str] = None,
+                   criterio: Optional[str] = None,
+                   color: Optional[str] = None) -> Optional[dict]:
+        constelacion = cls._obtener_por_id(constelacion_id)
+        if not constelacion or constelacion["hash_proyecto"] != hash_proyecto:
+            return None
+
+        ahora = datetime.now().isoformat()
+        campos, vals = [], []
+        if nombre is not None:
+            campos.append(f"nombre = {_ph(1)}")
+            vals.append(nombre)
+        if descripcion is not None:
+            campos.append(f"descripcion = {_ph(1)}")
+            vals.append(descripcion)
+        if criterio is not None:
+            campos.append(f"criterio = {_ph(1)}")
+            vals.append(criterio)
+        if color is not None and color in COLORES_CONSTELACION:
+            campos.append(f"color = {_ph(1)}")
+            vals.append(color)
+        if not campos:
+            return constelacion
+
+        campos.append(f"actualizado_en = {_ph(1)}")
+        vals.append(ahora)
+        vals.append(constelacion_id)
+
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"UPDATE {cls.T} SET {', '.join(campos)} "
+                f"WHERE id = {_ph(1)}",
+                vals,
+            )
+        return cls._obtener_por_id(constelacion_id)
+
+    @classmethod
+    def eliminar(cls, constelacion_id: int, hash_proyecto: str) -> bool:
+        constelacion = cls._obtener_por_id(constelacion_id)
+        if not constelacion or constelacion["hash_proyecto"] != hash_proyecto:
+            return False
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"DELETE FROM {cls.T} WHERE id = {_ph(1)}",
+                (constelacion_id,),
+            )
+        return True
+
+    @classmethod
+    def agregar_entrada(cls, constelacion_id: int, entrada_id: int,
+                        hash_proyecto: str,
+                        nota: Optional[str] = None,
+                        orden: int = 0) -> Optional[dict]:
+        constelacion = cls._obtener_por_id(constelacion_id)
+        if not constelacion or constelacion["hash_proyecto"] != hash_proyecto:
+            return None
+        ahora = datetime.now().isoformat()
+        with _conexion() as (con, cur):
+            try:
+                cur.execute(
+                    f"INSERT INTO {cls.TE} "
+                    f"(constelacion_id, entrada_id, nota, orden, creado_en) "
+                    f"VALUES ({_ph(5)})",
+                    (constelacion_id, entrada_id, nota, orden, ahora),
+                )
+                eid = _id_ultimo_bib(cur)
+            except Exception:
+                # ya existe — actualiza la nota si se provee
+                if nota is not None:
+                    cur.execute(
+                        f"UPDATE {cls.TE} SET nota = {_ph(1)} "
+                        f"WHERE constelacion_id = {_ph(1)} "
+                        f"AND entrada_id = {_ph(1)}",
+                        (nota, constelacion_id, entrada_id),
+                    )
+                return cls._obtener_entrada_pivot(constelacion_id, entrada_id)
+        return cls._obtener_entrada_pivot_por_id(eid)
+
+    @classmethod
+    def quitar_entrada(cls, constelacion_id: int, entrada_id: int,
+                       hash_proyecto: str) -> bool:
+        constelacion = cls._obtener_por_id(constelacion_id)
+        if not constelacion or constelacion["hash_proyecto"] != hash_proyecto:
+            return False
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"DELETE FROM {cls.TE} "
+                f"WHERE constelacion_id = {_ph(1)} AND entrada_id = {_ph(1)}",
+                (constelacion_id, entrada_id),
+            )
+        return True
+
+    @classmethod
+    def entradas_de(cls, constelacion_id: int) -> list[dict]:
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"SELECT ce.id, ce.constelacion_id, ce.entrada_id, "
+                f"ce.nota, ce.orden, ce.creado_en, "
+                f"e.slug, e.titulo, e.dominio, e.estado "
+                f"FROM {cls.TE} ce "
+                f"JOIN biblioteca_entradas e ON e.id = ce.entrada_id "
+                f"WHERE ce.constelacion_id = {_ph(1)} "
+                f"ORDER BY ce.orden ASC, ce.creado_en ASC",
+                (constelacion_id,),
+            )
+            return [_row_to_constelacion_entrada(r) for r in cur.fetchall()]
+
+    # ── helpers internos ───────────────────────────────────────────────────
+
+    @classmethod
+    def _obtener_por_id(cls, constelacion_id: int) -> Optional[dict]:
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"SELECT id, nombre, descripcion, criterio, hash_proyecto, "
+                f"color, creado_en, actualizado_en "
+                f"FROM {cls.T} WHERE id = {_ph(1)}",
+                (constelacion_id,),
+            )
+            row = cur.fetchone()
+            return _row_to_constelacion(row) if row else None
+
+    @classmethod
+    def _obtener_entrada_pivot(cls, constelacion_id: int,
+                               entrada_id: int) -> Optional[dict]:
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"SELECT ce.id, ce.constelacion_id, ce.entrada_id, "
+                f"ce.nota, ce.orden, ce.creado_en, "
+                f"e.slug, e.titulo, e.dominio, e.estado "
+                f"FROM {cls.TE} ce "
+                f"JOIN biblioteca_entradas e ON e.id = ce.entrada_id "
+                f"WHERE ce.constelacion_id = {_ph(1)} "
+                f"AND ce.entrada_id = {_ph(1)}",
+                (constelacion_id, entrada_id),
+            )
+            row = cur.fetchone()
+            return _row_to_constelacion_entrada(row) if row else None
+
+    @classmethod
+    def _obtener_entrada_pivot_por_id(cls, pivot_id: int) -> Optional[dict]:
+        with _conexion() as (con, cur):
+            cur.execute(
+                f"SELECT ce.id, ce.constelacion_id, ce.entrada_id, "
+                f"ce.nota, ce.orden, ce.creado_en, "
+                f"e.slug, e.titulo, e.dominio, e.estado "
+                f"FROM {cls.TE} ce "
+                f"JOIN biblioteca_entradas e ON e.id = ce.entrada_id "
+                f"WHERE ce.id = {_ph(1)}",
+                (pivot_id,),
+            )
+            row = cur.fetchone()
+            return _row_to_constelacion_entrada(row) if row else None
